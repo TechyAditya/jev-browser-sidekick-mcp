@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-test/
+.env
+*.log
+.jev-run/
+.cart-*.jpg
+.DS_Store
+Thumbs.db
