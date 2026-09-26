@@ -57,3 +57,32 @@ jobs:
 
       - name: Verify package can be packed
         run: npm pack --dry-run
+
+      # npm rewrites a manifest it dislikes and publishes the rewritten one with
+      # a warning. That silently dropped both bin entries from 0.1.1. Treat any
+      # rewrite as a failure rather than reading warnings after the fact.
+      - name: Verify npm does not rewrite the manifest
+        run: |
+          npm publish --dry-run 2>&1 | tee publish-check.log
+          if grep -q "auto-corrected" publish-check.log; then
+            echo "::error::npm rewrote package.json while packing. Fix the fields it names above."
+            exit 1
+          fi
+
+      - name: Verify the bins are declared
+        run: |
+          node -e "
+            const bin = require('./package.json').bin ?? {};
+            const want = ['jev-browser-sidekick-mcp', 'jev-bro'];
+            const missing = want.filter((name) => !bin[name]);
+            if (missing.length) {
+              console.error('missing bin entries: ' + missing.join(', '));
+              process.exit(1);
+            }
+            for (const [name, target] of Object.entries(bin)) {
+              if (target.startsWith('./')) {
+                console.error('bin ' + name + ' starts with ./, which npm 11 rejects');
+                process.exit(1);
+              }
+            }
+          "

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-09-27
+
+### Fixed
+
+- Declare the `bin` targets without a `./` prefix. npm 10 normalised the prefix away,
+  but npm 11, which the publish workflow runs, calls it invalid and drops the entry.
+  Both `jev-browser-sidekick-mcp` and `jev-bro` were removed from 0.1.1 this way, so
+  install that version and neither command exists. Use 0.1.2 or 0.1.0.
+
+### Added
+
+- CI fails when npm rewrites the manifest while packing, and when a `bin` entry is
+  missing or carries a `./` prefix. The publish workflow refuses to ship a rewritten
+  manifest.
+
 ## [0.1.1] - 2026-09-27
 
 ### Fixed
