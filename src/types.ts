@@ -94,7 +94,11 @@ export interface GroupResult {
   steps: RunStep[];
   url?: string;
   title?: string;
-  /** Set when the series carried `expect`. True when that text was on the page. */
+  /**
+   * True when `expect` was found on the final page. False when the series
+   * carried `expect` and the text was missing, or the series stopped before
+   * anything could be checked. Undefined only when the series never asked.
+   */
   verified?: boolean;
   /**
    * The expected text with the words around it, so the caller can tell a cart

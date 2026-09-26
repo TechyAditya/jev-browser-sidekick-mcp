@@ -403,26 +403,32 @@ const runGroup = async (ctx: {
   // Proof is only worth reading when every step ran. Checking a series that
   // stopped would report the text as missing when it was never looked for.
   let proofChecked = false;
-  if (group.expect && targetId && status === "completed") {
-    proofChecked = true;
-    // A cart drawn by the page's own scripts arrives after the navigation, so
-    // a single look can miss proof that is about to appear.
+  if (group.expect) {
+    // A series that asked for proof and did not get it is not verified, whether
+    // the text was missing or the run never reached the page. Leaving this unset
+    // made the two look like a series that never asked, and the caller's rollup
+    // then read "no answer" as "passed".
     verified = false;
-    for (let attempt = 0; attempt < 4 && !verified; attempt += 1) {
-      if (attempt > 0) await browser.settle(targetId, 1500).catch(() => undefined);
-      const snap = await browser.snapshot(targetId).catch(() => undefined);
-      if (snap) {
-        currentUrl = snap.url ?? currentUrl;
-        currentTitle = snap.title ?? currentTitle;
+    if (targetId && status === "completed") {
+      proofChecked = true;
+      // A cart drawn by the page's own scripts arrives after the navigation, so
+      // a single look can miss proof that is about to appear.
+      for (let attempt = 0; attempt < 4 && !verified; attempt += 1) {
+        if (attempt > 0) await browser.settle(targetId, 1500).catch(() => undefined);
+        const snap = await browser.snapshot(targetId).catch(() => undefined);
+        if (snap) {
+          currentUrl = snap.url ?? currentUrl;
+          currentTitle = snap.title ?? currentTitle;
+        }
+        // Read what the page shows, and fall back to the tree if that fails.
+        const shown = await readPageText(browser, targetId);
+        proof =
+          proofContext(shown, group.expect) ??
+          (snap ? proofContext(snap.text, group.expect) : undefined);
+        verified = proof !== undefined;
       }
-      // Read what the page shows, and fall back to the tree if that fails.
-      const shown = await readPageText(browser, targetId);
-      proof =
-        proofContext(shown, group.expect) ??
-        (snap ? proofContext(snap.text, group.expect) : undefined);
-      verified = proof !== undefined;
+      if (!verified) status = "unverified";
     }
-    if (!verified) status = "unverified";
   }
 
   // A worst-case rollup reads as total failure when most steps worked, so

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-27
+
+### Fixed
+
+- Report `verified` as false when a series carried `expect` and stopped before the
+  check could run. It was left unset, which the top-level rollup could not tell apart
+  from a series that never asked for proof, so a run where one group passed its check
+  and another never reached its page reported `verified: true`.
+
+### Added
+
+- npm, CI, Node, and licence badges in the README.
+
 ## [0.1.0] - 2026-09-27
 
 First release.

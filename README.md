@@ -1,5 +1,10 @@
 # jev-browser-sidekick-mcp
 
+[![npm](https://img.shields.io/npm/v/jev-browser-sidekick-mcp)](https://www.npmjs.com/package/jev-browser-sidekick-mcp)
+[![CI](https://github.com/TechyAditya/jev-browser-sidekick-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/TechyAditya/jev-browser-sidekick-mcp/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/jev-browser-sidekick-mcp)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/jev-browser-sidekick-mcp)](LICENSE)
+
 An MCP server that drives a browser with Jev, TypeSafe's decision model. You write the steps. Jev chooses which control on the page carries out each one. The server does the clicking and the waiting, and it keeps the budgets.
 
 The server has two tools. `run_action` does the browser work. `use_jev_raw` answers one typed question with no browser involved.
