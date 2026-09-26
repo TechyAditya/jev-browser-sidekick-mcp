@@ -8,7 +8,7 @@ Jev named the package. Six candidates went into `use_jev_raw` with the download 
 
 ## Install agentic-playwright-mcp alongside it
 
-Install [`agentic-playwright-mcp`](https://www.npmjs.com/package/agentic-playwright-mcp) as well. This server runs at its best with that one beside it, and the two are built to be used together.
+Install [agentic-playwright-mcp](https://www.npmjs.com/package/agentic-playwright-mcp) as well. This server runs at its best with that one beside it, and the two are built to be used together.
 
 This server does not start its own browser. It attaches to the Chrome that `agentic-playwright-mcp` already runs, at `http://127.0.0.1:9223`. One Chrome, one profile, one set of cookies, shared by both servers and by your agent. A site you signed into through your Playwright tools is still signed in when a step runs here, and a cart this server filled is still there when you look at it yourself.
 
@@ -16,18 +16,43 @@ That shared session is what makes the pair stable. Pass a `targetId` from your P
 
 If no Chrome is listening, this server starts one of its own. It works, but nothing else can see that browser, so you lose the handoff and the sign-in you already had.
 
+## Install
+
+Install both globally. `agentic-playwright-mcp` is a peer dependency, so npm pulls it in on its own, but naming it here also puts its commands on your `PATH`.
+
+```bash
+npm install -g agentic-playwright-mcp jev-browser-sidekick-mcp
+```
+
+That gives you four commands, a long form and a short form for each package.
+
+| Long | Short | What it runs |
+| --- | --- | --- |
+| `jev-browser-sidekick-mcp` | `jev-bro` | This server, and its `setup`, `doctor`, and `run` subcommands |
+| `agentic-playwright-mcp` | `apmcp` | The browser this server attaches to |
+
+npm writes a `.cmd` and a `.ps1` shim next to each command on Windows, so all four work unchanged in PowerShell, in cmd, in Git Bash, and in WSL.
+
+To skip the install and fetch on demand, use `npx --yes` with the full package name. `npx` resolves a package name rather than a command name, so `npx --yes jev-bro` does not work.
+
+```bash
+npx --yes jev-browser-sidekick-mcp doctor
+```
+
 ## Save an API key
 
 ```bash
-npx --yes jev-sidekick setup --provider openrouter --api-key "$OPENROUTER_API_KEY"
+jev-bro setup --provider openrouter --api-key "$OPENROUTER_API_KEY"
 ```
+
+In PowerShell, use `$env:OPENROUTER_API_KEY`. In cmd, use `%OPENROUTER_API_KEY%`.
 
 The command writes `~/.jev/.env`. The MCP server, the CLI, and `runAction` all read that file.
 
 To use a TypeSafe key instead, run this command.
 
 ```bash
-npx --yes jev-sidekick setup --provider official --api-key "$TYPESAFE_API_KEY"
+jev-bro setup --provider official --api-key "$TYPESAFE_API_KEY"
 ```
 
 To add this server to `~/.cursor/mcp.json`, pass `--install-cursor`. The command leaves the `agentic-playwright-mcp` entry alone.
@@ -37,7 +62,7 @@ To override `~/.jev` inside this repo, copy `.env.example` to `.env` and set the
 ## Check the setup
 
 ```bash
-npx --yes jev-sidekick doctor
+jev-bro doctor
 ```
 
 The output includes `jev decision: ok` and a `playwright: ok` line with a `targetId`.
@@ -67,16 +92,18 @@ Start the `playwright` entry first, or just let the host start both. This server
 
 Jev picks among labelled options and returns typed answers. It does not read plans and does not write text, so you write the plan and each step hands Jev one choice.
 
-| Step | What it does |
-| --- | --- |
-| `search <words>` | Puts the words in the page's own search box |
-| `open the <words> result` | Chooses that entry out of a list |
-| `open the <name> page` | Reaches a place, such as the cart page |
-| `click <label>` | Presses the control carrying that label |
-| `keep clicking <label>` | Presses it until the page stops offering it |
-| `clear <thing>` | The same, for a delete control it finds itself |
-| `read <thing>` | Hands the page's own words back to you |
-| `read the page title and url` | Answers "where am I" without the whole page |
+
+| Step                          | What it does                                   |
+| ----------------------------- | ---------------------------------------------- |
+| `search <words>`              | Puts the words in the page's own search box    |
+| `open the <words> result`     | Chooses that entry out of a list               |
+| `open the <name> page`        | Reaches a place, such as the cart page         |
+| `click <label>`               | Presses the control carrying that label        |
+| `keep clicking <label>`       | Presses it until the page stops offering it    |
+| `clear <thing>`               | The same, for a delete control it finds itself |
+| `read <thing>`                | Hands the page's own words back to you         |
+| `read the page title and url` | Answers "where am I" without the whole page    |
+
 
 Each step acts on one page. Use the words that appear on the screen, because Jev matches labels literally.
 
@@ -132,21 +159,25 @@ Errands that do not depend on each other belong in `groups`, and they run at the
 }
 ```
 
+
+
 ## Read the result
 
 The result has `is_finished`, `targetIds`, `groups`, `status`, `summary`, and a `handoff` when something stopped. Each group has its own `tasks`, `steps`, and `counts`. `snapshot` appears only when you set `returnSnapshot`, and `usage`, `elapsedMs`, and per-step `ms` only when you set `debug`.
 
 Every step has its own status.
 
-| Status | What it means |
-| --- | --- |
-| `completed` | The step did what it said |
-| `partial` | It did some of the work and stopped with more to do |
-| `rejected` | The page answered no. Read `reason` |
-| `blocked` | The page wants something only you can give. Read `handoff` |
+
+| Status       | What it means                                                |
+| ------------ | ------------------------------------------------------------ |
+| `completed`  | The step did what it said                                    |
+| `partial`    | It did some of the work and stopped with more to do          |
+| `rejected`   | The page answered no. Read `reason`                          |
+| `blocked`    | The page wants something only you can give. Read `handoff`   |
 | `unverified` | Every step ran, and `expect` was missing from the final page |
-| `max_steps` | The budget or the clock ran out |
-| `skipped` | An earlier step in the series stopped this one |
+| `max_steps`  | The budget or the clock ran out                              |
+| `skipped`    | An earlier step in the series stopped this one               |
+
 
 A group's `status` is worst-case across its steps, so a group where eight of ten steps completed still reads as `rejected`. Read `counts` for what actually happened.
 
@@ -158,15 +189,19 @@ Later steps depend on earlier ones, so a step that does not complete ends its se
 
 ### Why a step was turned down
 
-| `reason` | Meaning |
-| --- | --- |
-| `no_control` | Nothing on that page does what the step named |
-| `no_match` | The list held no entry matching what the step named |
-| `unavailable` | Out of stock, sold out, or not delivered here |
-| `other_route` | The page offers a different route, such as other sellers |
-| `wrong_page` | The page is not about the wanted thing |
-| `not_ready` | The page had not finished loading |
-| `sign_in`, `credentials`, `captcha` | Returned as `blocked`, not `rejected` |
+
+| `reason`                            | Meaning                                                  |
+| ----------------------------------- | -------------------------------------------------------- |
+| `no_control`                        | Nothing on that page does what the step named            |
+| `no_match`                          | The list held no entry matching what the step named      |
+| `unavailable`                       | Out of stock, sold out, or not delivered here            |
+| `other_route`                       | The page offers a different route, such as other sellers |
+| `wrong_page`                        | The page is not about the wanted thing                   |
+| `not_ready`                         | The page had not finished loading                        |
+| `sign_in`, `credentials`, `captcha` | Returned as `blocked`, not `rejected`                    |
+
+
+
 
 ## Prove the run worked
 
@@ -207,11 +242,13 @@ The tab is still open and you already share it, so you can finish the step throu
 
 On every step, the server asks Jev whether the task can happen on this page at all. When Jev says no, the server asks why, then stops the step with `blocked` and a `reason`.
 
-| `reason` | The page is |
-| --- | --- |
-| `sign_in` | A sign-in wall |
-| `credentials` | Asking for a password or a one-time code |
-| `captcha` | Asking the user to prove they are a human |
+
+| `reason`      | The page is                               |
+| ------------- | ----------------------------------------- |
+| `sign_in`     | A sign-in wall                            |
+| `credentials` | Asking for a password or a one-time code  |
+| `captcha`     | Asking the user to prove they are a human |
+
 
 Those three come back as `blocked` with a handoff, because you own the same tab and can still act. This server never fills a password, a one-time code, or a captcha itself. Type the value in the shared tab, hand it to the user, or stop. Pass ordinary strings such as an email or a postcode in `values`.
 
@@ -229,14 +266,16 @@ A call your MCP client drops is the case worth avoiding. The browser work still 
 
 `usage` sums what each API response reported. Nothing in it is estimated.
 
-| Field | Source |
-| --- | --- |
-| `inputTokens` | `usage.input_tokens` on every Jev response |
-| `outputTokens` | `usage.output_tokens` on every Jev response |
-| `totalTokens` | The two above, added |
-| `decisions` | Jev calls made |
-| `textCalls` | Calls to the text model that fills a field Jev cannot write |
-| `costUsd` | Present only when a provider returns a price |
+
+| Field          | Source                                                      |
+| -------------- | ----------------------------------------------------------- |
+| `inputTokens`  | `usage.input_tokens` on every Jev response                  |
+| `outputTokens` | `usage.output_tokens` on every Jev response                 |
+| `totalTokens`  | The two above, added                                        |
+| `decisions`    | Jev calls made                                              |
+| `textCalls`    | Calls to the text model that fills a field Jev cannot write |
+| `costUsd`      | Present only when a provider returns a price                |
+
 
 TypeSafe returns tokens and no price, so `costUsd` is absent on a direct TypeSafe key and present through OpenRouter.
 
@@ -313,7 +352,7 @@ Traces land in `~/.jev/traces`, one file per run.
 ## Run one goal from the CLI
 
 ```bash
-npx --yes jev-sidekick run "Open example.com and click More information" --snapshot
+jev-bro run "Open example.com and click More information" --snapshot
 ```
 
 Add `--expect` to check the final page, `--task` to write a series, and `--groups-json` for parallel groups.
@@ -334,3 +373,4 @@ const result = await runAction({
 
 console.log(result.status, result.verified, result.usage.totalTokens);
 ```
+

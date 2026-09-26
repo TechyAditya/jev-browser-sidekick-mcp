@@ -7,7 +7,7 @@
   "types": "./dist/api.d.ts",
   "bin": {
     "jev-browser-sidekick-mcp": "./dist/index.js",
-    "jev-sidekick": "./dist/cli.js"
+    "jev-bro": "./dist/index.js"
   },
   "exports": {
     ".": {
@@ -33,7 +33,7 @@
     "start": "node dist/index.js",
     "cli": "tsx src/cli.ts",
     "type-check": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json --pretty false && node --test --test-timeout 20000 \"dist-test/**/*.test.js\"",
+    "test": "tsc -p tsconfig.test.json --pretty false && node --test --test-timeout 20000 dist-test/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -62,6 +62,9 @@
   "homepage": "https://github.com/TechyAditya/jev-browser-sidekick-mcp#readme",
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "agentic-playwright-mcp": ">=1.2.1"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.1",

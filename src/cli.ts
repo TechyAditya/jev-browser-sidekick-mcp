@@ -8,7 +8,7 @@ import { connectPlaywright } from "./playwright.js";
 import { runSetup, type SetupOptions } from "./setup.js";
 import type { Provider, TaskGroupSpec } from "./types.js";
 
-const HELP = `jev
+const HELP = `jev-bro, the browser sidekick. You write the steps, Jev picks the controls.
 
 setup
   Write OPENROUTER_API_KEY or TYPESAFE_API_KEY to ~/.jev/.env.
