@@ -42,8 +42,8 @@ export const generateTypeText = async (
 
   const client = new OpenRouter({
     apiKey: key,
-    httpReferer: "https://github.com/jev-mcp",
-    appTitle: "jev-mcp",
+    httpReferer: "https://github.com/TechyAditya/jev-browser-sidekick-mcp",
+    appTitle: "jev-browser-sidekick-mcp",
   });
 
   const completion = await client.chat.send({

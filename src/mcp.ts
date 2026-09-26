@@ -176,7 +176,9 @@ const questionSchema = z
     criteria: z
       .union([z.record(z.string().nullable()), z.array(z.string())])
       .optional()
-      .describe("Options for choice (max 255), ordered levels for score (max 10), yes and no wording for noul."),
+      .describe(
+        "Options for choice (max 255), keyed by your own names. Ordered levels for score (max 10), as an array, lowest first. For noul, the two keys true and false, each describing what that answer means.",
+      ),
   })
   .describe("One typed question.");
 
@@ -194,8 +196,9 @@ const INSTRUCTIONS = `Jev is a decision model. It picks among labelled options a
 answers with probabilities. It writes no text and reads no images, so you
 write the plan and each step hands Jev one choice.
 
-run_action drives a real browser. use_jev_raw is the rare case: one typed
-decision with no browser in it.
+run_action drives a real browser. use_jev_raw takes one typed decision with
+no browser in it. Use it whenever a call is close enough that you would
+otherwise guess, and you want the odds instead.
 
 The step shapes, one page each:
   search <words>              put the words in the page's own search box
@@ -345,7 +348,15 @@ export const createJevServer = (options: ServerOptions = {}): McpServer => {
 
   server.tool(
     "use_jev_raw",
-    `Ask Jev one typed question, or several, with no browser involved. Use it when you are weighing options that read as equally good and you want a calibrated pick instead of a coin flip: which of these fixes first, does this text meet the bar, rank these candidates, is this step risky. Returns the chosen option, the probability of every option, confidence, and the tokens the API reported. Read the ${RAW_GUIDE_URI} resource before the first call; it carries the question shapes and the criteria rules.`,
+    `Ask Jev one typed question, or several, with no browser involved.
+
+Use it whenever a decision has more than one defensible answer and you are about to pick on instinct. Jev gives a probability for every option and a confidence, so a close call reads as close, and a clear one reads as clear. Anything you would otherwise settle by coin flip and call judgment belongs here.
+
+Decisions worth handing over: which of these fixes to do first, which name or design to ship when each has a real trade-off, whether this text meets a bar you can write down, which of two error messages a stranger understands faster, whether a step is risky enough to stop and ask the user, how to rank a list of candidates, which of two readings of an ambiguous request the user meant.
+
+Ask every question you have in one call. They share the state, they answer in parallel, and each extra question costs its own tokens and almost no extra time. Three questions over a page of state run about a tenth of a cent, so the cost is rarely the reason to skip it.
+
+The answer gives the chosen option, the probability of every option, a confidence, and the tokens the API counted. Read the ${RAW_GUIDE_URI} resource before the first call for the question shapes and the criteria rules.`,
     rawSchema,
     async (args) => {
       try {

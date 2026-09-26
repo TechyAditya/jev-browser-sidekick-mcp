@@ -48,7 +48,10 @@ Every question needs an id you pick, a \`type\`, and \`instructions\`.
 - Write \`instructions\` literally. Name the subject, the condition, and what
   counts. Jev reads them as written.
 - \`criteria\` holds the options for a \`choice\`, the ordered levels for a
-  \`score\`, and the meaning of yes and no for a \`noul\`.
+  \`score\`, and the meaning of each answer for a \`noul\`.
+- A \`choice\` keys \`criteria\` by your own option names. A \`score\` takes an
+  array, lowest level first. A \`noul\` keys it by \`true\` and \`false\`, and
+  those two spellings are the only ones it accepts.
 
 Rules for \`criteria\`:
 
@@ -116,7 +119,11 @@ Request:
     },
     "risky": {
       "type": "noul",
-      "instructions": "Does the fix in \\\`fixes.schema\\\` change a public type other code depends on?"
+      "instructions": "Does the fix in \\\`fixes.schema\\\` change a public type other code depends on?",
+      "criteria": {
+        "true": "The fix changes a type that other code imports.",
+        "false": "The fix stays inside this module."
+      }
     }
   }
 }

@@ -117,7 +117,7 @@ export const connectPlaywright = async (
       Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
     ),
   });
-  const client = new Client({ name: "jev-mcp", version: "0.1.0" });
+  const client = new Client({ name: "jev-browser-sidekick-mcp", version: "0.1.0" });
   await withTimeout(client.connect(transport), config.callTimeoutMs, "playwright connect");
 
   const enqueue = (() => {

@@ -628,6 +628,20 @@ const runTask = async (ctx: {
         detail: `harness ${outcome.detail}`,
       });
       const after = await browser.snapshot(targetId).catch(() => undefined);
+      // Pressing nothing is the page's answer, the same answer a single press
+      // gives, so it reads the same way. A cart page that shows its items as a
+      // summary with no delete beside them lands here, and calling that done
+      // would report an untouched cart as cleared.
+      if (outcome.pressed === 0) {
+        return {
+          status: "rejected",
+          summary: `no control on this page does "${clip(actionLabels[0] ?? task, 40)}"`,
+          reason: "no_control",
+          url: after?.url ?? currentUrl,
+          title: after?.title ?? currentTitle,
+          targetId,
+        };
+      }
       // Giving up with controls still on the page is not a cleared cart.
       const done = outcome.left === 0;
       return {

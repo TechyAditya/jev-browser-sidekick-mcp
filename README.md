@@ -1,38 +1,33 @@
-# Jev MCP
+# jev-browser-sidekick-mcp
 
-An MCP server that drives a browser with Jev, TypeSafe's decision model. You write the steps. Jev chooses which control on the page carries out each one. Code owns the clicking, the waiting, and the budgets.
+An MCP server that drives a browser with Jev, TypeSafe's decision model. You write the steps. Jev chooses which control on the page carries out each one. The server does the clicking and the waiting, and it keeps the budgets.
 
 The server has two tools. `run_action` does the browser work. `use_jev_raw` answers one typed question with no browser involved.
 
-## Pair it with agentic-playwright-mcp
+Jev named the package. Six candidates went into `use_jev_raw` with the download counts of every competing package and the trade-offs of each name written out. It picked this one at a probability of 0.66, against 0.17 for the runner-up, and it cost $0.000058 to ask. The maintainer had argued for a different name and lost.
 
-This server does not start its own browser. It attaches to the Chrome that [`agentic-playwright-mcp`](https://www.npmjs.com/package/agentic-playwright-mcp) already runs, at `http://127.0.0.1:9223`.
+## Install agentic-playwright-mcp alongside it
 
-That sharing is the point. Both servers see the same tabs, the same profile, and the same cookies, so a session you signed into once stays signed in. Pass a `targetId` from your own Playwright tools into `run_action`, and pass the `targetId` values it returns back the other way.
+Install [`agentic-playwright-mcp`](https://www.npmjs.com/package/agentic-playwright-mcp) as well. This server runs at its best with that one beside it, and the two are built to be used together.
 
-If no Chrome is listening, the server starts one of its own.
+This server does not start its own browser. It attaches to the Chrome that `agentic-playwright-mcp` already runs, at `http://127.0.0.1:9223`. One Chrome, one profile, one set of cookies, shared by both servers and by your agent. A site you signed into through your Playwright tools is still signed in when a step runs here, and a cart this server filled is still there when you look at it yourself.
 
-## Install
+That shared session is what makes the pair stable. Pass a `targetId` from your Playwright tools into `run_action`, and pass the `targetId` values it returns back the other way, and both sides act on the same tab. When a step stops as `blocked` on a password or a captcha, the tab is one you already hold, so you can finish it in place and resume.
 
-```bash
-npm install
-npm run build
-```
-
-The build writes `dist/index.js` and `dist/cli.js`.
+If no Chrome is listening, this server starts one of its own. It works, but nothing else can see that browser, so you lose the handoff and the sign-in you already had.
 
 ## Save an API key
 
 ```bash
-npx jev setup --provider openrouter --api-key "$OPENROUTER_API_KEY"
+npx --yes jev-sidekick setup --provider openrouter --api-key "$OPENROUTER_API_KEY"
 ```
 
 The command writes `~/.jev/.env`. The MCP server, the CLI, and `runAction` all read that file.
 
-To use a TypeSafe key instead, run this:
+To use a TypeSafe key instead, run this command.
 
 ```bash
-npx jev setup --provider official --api-key "$TYPESAFE_API_KEY"
+npx --yes jev-sidekick setup --provider official --api-key "$TYPESAFE_API_KEY"
 ```
 
 To add this server to `~/.cursor/mcp.json`, pass `--install-cursor`. The command leaves the `agentic-playwright-mcp` entry alone.
@@ -42,25 +37,31 @@ To override `~/.jev` inside this repo, copy `.env.example` to `.env` and set the
 ## Check the setup
 
 ```bash
-npx jev doctor
+npx --yes jev-sidekick doctor
 ```
 
 The output includes `jev decision: ok` and a `playwright: ok` line with a `targetId`.
 
-## Add the server
+## Add the servers
 
-Put this in the host `mcp.json`, with `args` pointing at this repo's `dist/index.js`.
+Put both in the host `mcp.json`. Neither needs a path, and `npx` fetches them on first run.
 
 ```json
 {
 	"mcpServers": {
+		"playwright": {
+			"command": "npx",
+			"args": ["--yes", "agentic-playwright-mcp"]
+		},
 		"jev": {
-			"command": "node",
-			"args": ["E:/Code/jev/dist/index.js"]
+			"command": "npx",
+			"args": ["--yes", "jev-browser-sidekick-mcp"]
 		}
 	}
 }
 ```
+
+Start the `playwright` entry first, or just let the host start both. This server looks for that Chrome on every call, so the order only decides whether the first call attaches or opens its own browser.
 
 ## Write the steps
 
@@ -77,7 +78,7 @@ Jev picks among labelled options and returns typed answers. It does not read pla
 | `read <thing>` | Hands the page's own words back to you |
 | `read the page title and url` | Answers "where am I" without the whole page |
 
-One step, one page. Use the words that appear on the screen, because Jev matches labels literally.
+Each step acts on one page. Use the words that appear on the screen, because Jev matches labels literally.
 
 Adding one item to a cart is three steps, one per page.
 
@@ -85,27 +86,27 @@ Adding one item to a cart is three steps, one per page.
 ["search colgate toothpaste", "open the best matching colgate toothpaste result", "click add to cart"]
 ```
 
-A single `add colgate toothpaste to cart` still runs, but it never leaves the results page, so it presses whatever there carries those words.
+A single `add colgate toothpaste to cart` still runs, but it never leaves the results page, so it presses whatever on that page carries those words.
 
 Each step starts a fresh Jev loop that sees only the live page, so one step never inherits another's page or history.
 
-### Repetition is a shape, not a shopping word
+### Repeat a press until the page stops offering it
 
-`clear cart` is one use of a general primitive: press the same control until the page stops offering it. A step that names its own control keeps it, so `keep clicking Load more` works anywhere. A step naming a container instead, such as `clear cart`, falls back to whatever the page uses for delete or remove.
+`clear cart` is one use of a general rule. The server presses the same control until the page stops offering it. A step that names its own control keeps it, so `keep clicking Load more` works anywhere. A step that names a container instead, such as `clear cart`, falls back to whatever the page uses for delete or remove.
 
-A repeat that gives up with controls still on the page returns `partial`, never `completed`.
+A repeat that gives up with controls still on the page returns `partial`, never `completed`. A repeat that presses nothing returns `rejected` with reason `no_control`, the same answer a single `click` gives, so an untouched cart never reads as a cleared one.
 
 ### When the outcome already holds
 
-A step that names a control the page no longer carries comes back `rejected` with reason `no_control`. Once an item is in the cart, Flipkart's product page replaces "Add to cart" with "Go to cart", so `click add to cart` finds nothing and says so.
+A step that names a control the page no longer carries comes back `rejected` with reason `no_control`. For example, once an item is in the cart, a product page can replace "Add to cart" with "Go to cart", so `click add to cart` finds nothing and says so.
 
-The server does not guess whether that means the work is already done. Judging that from the page finished steps without doing them, so a step that looks satisfied still runs and still reports honestly. End the series with a `read` step and decide from the cart's own words.
+The server does not guess whether that means the work is already done. In testing, guessing it from the page marked steps finished that had never run. So a step that already looks satisfied still runs, and it still reports what happened. End the series with a `read` step and decide from the cart's own words.
 
 ## Call run_action
 
 Steps in `tasks` run in order on one tab.
 
-Errands that do not depend on each other belong in `groups`, and they run at the same time, one tab each. Two sites, two accounts, or two separate searches are one call with two groups, never two calls. Reach for `groups` first, and fall back to a single series only when every step needs the page the step before it left. Series sharing a `targetId` run one after another, because they share a tab.
+Errands that do not depend on each other belong in `groups`, and they run at the same time, one tab each. Two sites, two accounts, or two separate searches are one call with two groups, never two calls. Use `groups` first, and fall back to a single series only when every step needs the page the step before it left. Series that share a `targetId` run one after another, because they share a tab.
 
 ```json
 {
@@ -133,9 +134,9 @@ Errands that do not depend on each other belong in `groups`, and they run at the
 
 ## Read the result
 
-The result carries `is_finished`, `targetIds`, `groups`, `status`, `summary`, and a `handoff` when something stopped. Each group carries its own `tasks`, `steps`, and `counts`. `snapshot` appears only when you set `returnSnapshot`, and `usage`, `elapsedMs`, and per-step `ms` only when you set `debug`.
+The result has `is_finished`, `targetIds`, `groups`, `status`, `summary`, and a `handoff` when something stopped. Each group has its own `tasks`, `steps`, and `counts`. `snapshot` appears only when you set `returnSnapshot`, and `usage`, `elapsedMs`, and per-step `ms` only when you set `debug`.
 
-Every step carries its own status.
+Every step has its own status.
 
 | Status | What it means |
 | --- | --- |
@@ -147,13 +148,13 @@ Every step carries its own status.
 | `max_steps` | The budget or the clock ran out |
 | `skipped` | An earlier step in the series stopped this one |
 
-A group's `status` is worst-case across its steps, so an eight-of-ten group reads as `rejected`. Read `counts` for what actually happened.
+A group's `status` is worst-case across its steps, so a group where eight of ten steps completed still reads as `rejected`. Read `counts` for what actually happened.
 
 ```json
 { "status": "rejected", "counts": { "completed": 12, "rejected": 1 } }
 ```
 
-Later steps stand on earlier ones, so a step that does not complete ends its series and the rest come back as `skipped` naming the step that stopped them. Set `noFail` on a series whose steps stand alone, and it runs them all.
+Later steps depend on earlier ones, so a step that does not complete ends its series, and the rest come back as `skipped` naming the step that stopped them. Set `noFail` on a series whose steps are independent, and it runs them all.
 
 ### Why a step was turned down
 
@@ -175,7 +176,7 @@ A `completed` status is Jev's claim. Set `expect` to the text that proves it, an
 { "tasks": ["open the cart page"], "expect": "subtotal (3 items)" }
 ```
 
-Pick text that only the finished state produces. `Subtotal (3 items)` works. A product name does not, because shops repeat product names in recommendation rails, and a rail can prove an empty cart. The result quotes the words either side of the match in `proof`, so you can see which it matched.
+Pick text that only the finished state produces. `Subtotal (3 items)` works. A product name does not, because shops repeat product names in recommendation rails, so the text matches even on an empty cart. The result quotes the words either side of the match in `proof`, so you can see which it matched.
 
 ```json
 { "verified": true, "proof": "…All Carts Subtotal (3 items): ₹509.00 Proceed to Buy…" }
@@ -185,7 +186,7 @@ The check runs only when every step completed. A series that stopped reports `pr
 
 ## Pick up a stopped run
 
-When a series stops early, the result carries a `handoff`.
+When a series stops early, the result includes a `handoff`.
 
 ```json
 {
@@ -202,9 +203,9 @@ When a series stops early, the result carries a `handoff`.
 
 The tab is still open and you already share it, so you can finish the step through your own Playwright tools, ask the user, or call `run_action` again with that `targetId` and the `remaining` steps.
 
-## Pages that stand in the way
+## Pages that block a step
 
-Jev is asked on every step whether the page is one where the task can happen at all. When it says no, the server asks why and stops the step with `blocked` and a `reason`.
+On every step, the server asks Jev whether the task can happen on this page at all. When Jev says no, the server asks why, then stops the step with `blocked` and a `reason`.
 
 | `reason` | The page is |
 | --- | --- |
@@ -218,7 +219,7 @@ Other reasons, such as `unavailable` or `wrong_page`, come back as `rejected`. T
 
 ## Keep a call short
 
-A call returns on its own clock, which defaults to 90 seconds. On expiry you get a normal result holding the steps that finished and a handoff naming the rest, so you resume by calling again with that `targetId` and the remaining steps.
+A call returns after its own timeout, which defaults to 90 seconds. On expiry you get a normal result holding the steps that finished and a handoff naming the rest, so you resume by calling again with that `targetId` and the remaining steps.
 
 A call your MCP client drops is the case worth avoiding. The browser work still happens, you never see the result, and running the same steps again does them twice. Keep `timeoutMs` under your client's own transport timeout and resume instead of asking for one long call.
 
@@ -239,11 +240,13 @@ A call your MCP client drops is the case worth avoiding. The browser work still 
 
 TypeSafe returns tokens and no price, so `costUsd` is absent on a direct TypeSafe key and present through OpenRouter.
 
-`decisions: 0` is normal and not a failure. A search, a destination, and a control named exactly what the step said all resolve without a judgment, so a run made only of those asks Jev nothing. A recent two-site run of 26 steps cost 19 decisions and about $0.001.
+`decisions: 0` is normal and not a failure. A search, a destination, and a control labelled exactly what the step said all resolve without a judgment call, so a run made only of those asks Jev nothing. A recent two-site run of 26 steps cost 19 decisions and about $0.001.
 
 ## Ask Jev without a browser
 
-`use_jev_raw` sends state and typed questions straight to Jev. Use it when you are weighing options that read as equally good and you want a calibrated pick instead of a coin flip, or when you want a yes-or-no gate before a costly step.
+`use_jev_raw` sends state and typed questions straight to Jev. Use it whenever a decision has more than one defensible answer and you are about to pick on instinct: which fix to do first, which name to ship when each has a real trade-off, whether a draft meets a bar you can write down, whether a step is risky enough to stop and ask the user.
+
+You get a probability for every option and a confidence, so a close call reads as close. Ask every question you have in one call, because they share the state and answer in parallel. Three questions over a page of state run about a tenth of a cent.
 
 ```json
 {
@@ -258,29 +261,35 @@ TypeSafe returns tokens and no price, so `costUsd` is absent on a direct TypeSaf
 }
 ```
 
-The answer carries the chosen option, a probability for every option, a confidence, and the tokens the API counted. The server publishes a `jev://raw-decisions` resource with the question shapes, the rules for writing criteria, and the size limits. Read it before the first call.
+The answer has the chosen option, a probability for every option, a confidence, and the tokens the API counted. The server publishes a `jev://raw-decisions` resource with the question types, the rules for writing criteria, and the size limits. Read it before the first call.
 
-## What the harness already handles
+Nothing says the state has to be about code. If you are the sort of person who stands in the cereal aisle for ten minutes, your sidekick will happily take that one too. Give it the four job offers, the three flat listings, the cat names, or what to cook tonight, write down what you actually care about in `criteria`, and it tells you which one it likes and how sure it is. A tenth of a cent for a friend who never answers "I don't know, what do you want to do" is a fair trade. It already picked this package's name, and it was right.
+
+## What the server already handles
 
 Leave these out of the plan. The server waits for loads, follows a link that opens its own tab, recovers element refs that went stale between the snapshot and the click, and skips invisible controls that carry real labels.
 
-Finding a control and choosing it are separate. When a step names a control, the server collects every control on the page carrying those words, including ones drawn as plain text with no accessibility role, and Jev picks one or answers that none of them fits. A step that finds nothing it can vouch for comes back `rejected` or `blocked` instead of pressing something at random.
+Finding a control and choosing it are separate. When a step names a control, the server collects every control on the page carrying those words, including ones drawn as plain text with no accessibility role, and Jev picks one or answers that none of them fits. When nothing fits, the step comes back `rejected` or `blocked` instead of pressing something at random.
 
 Jev reads text only, so this server works from the page's own text and takes no screenshots. A control drawn without text is found by its DOM text instead.
 
-A step that opens an entry is only done once that entry is up. A click that navigates, opens its own tab, or draws an overlay showing the entry all count. A click that leaves the page exactly as it was does not, so the step tries something else rather than reporting success.
+A step that opens an entry is done only once the page shows that entry. A click that navigates, opens its own tab, or draws an overlay showing the entry all count. A click that leaves the page exactly as it was does not count, so the step tries something else rather than reporting success.
 
 ## Traps on real sites
 
-These bit this server in testing and are worth knowing before you write steps.
+Each of these cost real runs in testing. Shopping sites found them, but nothing about them is particular to shopping.
 
-**One tab, two storefronts.** Amazon Fresh sits beside the main store in the same tab, and the search box keeps you in whichever one the tab is already in. Results there open overlays rather than product pages, so `click add to cart` finds nothing. Pass a `startUrl` that names the store you want, such as `https://www.amazon.in/s?k=colgate+toothpaste`.
+**One tab, two storefronts.** A site can run more than one storefront in the same tab, and its search box keeps you in whichever one the tab is already in. Results in the wrong storefront open overlays rather than their own pages, so a `click` step finds nothing. Pass a `startUrl` that names the storefront you want. For example, Amazon Fresh sits beside the main Amazon store in one tab.
 
-**One site, two carts.** Amazon keeps a separate Fresh cart. `clear cart` empties the one you are looking at, and the header count spans both, so a cleared cart can still show items.
+**One site, two collections.** A site can keep more than one cart, list, or queue, and show a count that spans all of them, so a collection you just emptied still reads as full. The page that lists everything usually shows the other collection read-only, with a link in place of the per-row controls, so a `clear` step there presses nothing and returns `rejected` with `no_control`. Open the collection that owns the items first. For example:
 
-**A page with no Add to cart.** When a listing has no default offer, Amazon shows "See All Buying Options" instead. The step comes back `rejected` with `no_control` or `other_route`. That is the page's answer, not a failure to retry.
+```json
+["open the cart page", "click Go to Fresh Cart", "clear cart"]
+```
 
-**A product that does not exist there.** Flipkart sells no plain Coca-Cola outside Flipkart Minutes, which needs a signed-in account. Expect `no_match`, or a near-miss substitution you should check with a `read` step.
+**A page that offers a different route.** When the usual action is unavailable, a page often puts another control in its place. The step returns `rejected` with `no_control` or `other_route`. That is the page's answer, not a failure to retry. For example, a listing with no default offer shows "See All Buying Options" where "Add to cart" would be.
+
+**A near miss in place of a match.** A search can answer with something close rather than the thing you named, most often when the real item sits behind a sign-in or in another storefront. Expect `no_match`, or check the substitution with a `read` step.
 
 ## Debug a run
 
@@ -292,8 +301,8 @@ To trace every run whatever the caller passes, add `--debug` to the server comma
 {
 	"mcpServers": {
 		"jev": {
-			"command": "node",
-			"args": ["E:/Code/jev/dist/index.js", "--debug"]
+			"command": "npx",
+			"args": ["--yes", "jev-browser-sidekick-mcp", "--debug"]
 		}
 	}
 }
@@ -304,15 +313,19 @@ Traces land in `~/.jev/traces`, one file per run.
 ## Run one goal from the CLI
 
 ```bash
-npx jev run "Open example.com and click More information" --snapshot
+npx --yes jev-sidekick run "Open example.com and click More information" --snapshot
 ```
 
 Add `--expect` to check the final page, `--task` to write a series, and `--groups-json` for parallel groups.
 
 ## Call runAction from code
 
+```bash
+npm install jev-browser-sidekick-mcp
+```
+
 ```ts
-import { runAction } from "jev-mcp";
+import { runAction } from "jev-browser-sidekick-mcp";
 
 const result = await runAction({
 	tasks: ["open the cart page", "clear cart"],

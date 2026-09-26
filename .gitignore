@@ -5,5 +5,6 @@ dist-test/
 *.log
 .jev-run/
 .cart-*.jpg
+*.tgz
 .DS_Store
 Thumbs.db

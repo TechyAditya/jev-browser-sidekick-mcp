@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import {
@@ -51,7 +50,7 @@ const writeEnvFile = (
   writeFileSync(path, body, { mode: 0o600 });
 };
 
-const mergeCursorMcp = (serverPath: string): string => {
+const mergeCursorMcp = (): string => {
   const file = join(homedir(), ".cursor", "mcp.json");
 
   let current: { mcpServers?: Record<string, unknown> } = {};
@@ -63,9 +62,10 @@ const mergeCursorMcp = (serverPath: string): string => {
     }
   }
   current.mcpServers ??= {};
+  // npx rather than this copy's own path, so the entry survives a reinstall.
   current.mcpServers.jev = {
-    command: process.execPath,
-    args: [serverPath],
+    command: process.platform === "win32" ? "npx.cmd" : "npx",
+    args: ["--yes", "jev-browser-sidekick-mcp"],
   };
   writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`);
   return file;
@@ -155,8 +155,7 @@ export const runSetup = async (options: SetupOptions = {}): Promise<string> => {
           .startsWith("y"));
 
     if (shouldInstall) {
-      const serverJs = fileURLToPath(new URL("./index.js", import.meta.url));
-      const installed = mergeCursorMcp(serverJs);
+      const installed = mergeCursorMcp();
       extra = `\nWrote the jev server entry to ${installed}.`;
     }
 

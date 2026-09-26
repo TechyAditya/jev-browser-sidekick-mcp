@@ -1,13 +1,13 @@
 {
-  "name": "jev-mcp",
+  "name": "jev-browser-sidekick-mcp",
   "version": "0.1.0",
-  "description": "MCP server that runs a browser goal with Jev and agentic-playwright-mcp.",
+  "description": "MCP server that runs plain-language browser steps. Jev, a typed decision model, picks the control on each page instead of an LLM reading the DOM.",
   "type": "module",
   "main": "./dist/api.js",
   "types": "./dist/api.d.ts",
   "bin": {
-    "jev": "./dist/cli.js",
-    "jev-mcp": "./dist/index.js"
+    "jev-browser-sidekick-mcp": "./dist/index.js",
+    "jev-sidekick": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -20,7 +20,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"
@@ -30,19 +32,37 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "cli": "tsx src/cli.ts",
+    "type-check": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.test.json --pretty false && node --test --test-timeout 20000 \"dist-test/**/*.test.js\"",
-    "prepare": "tsc -p tsconfig.json --pretty false"
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "jev",
     "mcp",
+    "model-context-protocol",
     "browser",
+    "browser-automation",
+    "web-agent",
+    "ai-agent",
+    "playwright",
+    "cdp",
+    "jev",
     "typesafe",
     "openrouter",
-    "playwright",
     "agent"
   ],
+  "author": "Aditya Sethi (https://github.com/TechyAditya)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TechyAditya/jev-browser-sidekick-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TechyAditya/jev-browser-sidekick-mcp/issues"
+  },
+  "homepage": "https://github.com/TechyAditya/jev-browser-sidekick-mcp#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.1",
     "@openrouter/sdk": "^1.3.17",

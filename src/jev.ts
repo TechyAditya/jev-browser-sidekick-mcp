@@ -155,8 +155,8 @@ const decideWithOpenRouterSdk = async (
 ): Promise<DecisionResult> => {
   const client = new OpenRouter({
     apiKey,
-    httpReferer: "https://github.com/jev-mcp",
-    appTitle: "jev-mcp",
+    httpReferer: "https://github.com/TechyAditya/jev-browser-sidekick-mcp",
+    appTitle: "jev-browser-sidekick-mcp",
   });
   const routed = model.includes("/") ? model : `typesafe/${model}`;
   const decisionsRequest = {
