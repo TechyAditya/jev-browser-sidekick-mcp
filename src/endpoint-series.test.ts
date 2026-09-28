@@ -37,7 +37,29 @@ const failWith = (status: number, body: string, contentType = "application/json"
   };
 };
 
-test("a two-step series stops on rate_limit, stays resumable, and resume skips completed work", { timeout: 90_000 }, async () => {
+/**
+ * These two drive a real page, so they need the shared Chrome. CI has none.
+ * Set JEV_E2E=1 to run them against a browser this suite starts itself.
+ */
+const browserReady = async (): Promise<boolean> => {
+  if (process.env.JEV_E2E === "1") return true;
+  const cdp = loadConfig().playwright.cdpEndpoint;
+  if (!cdp) return false;
+  try {
+    const response = await fetch(new URL("/json/version", cdp), {
+      signal: AbortSignal.timeout(1500),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+const skip = (await browserReady())
+  ? false
+  : "no browser on the CDP endpoint. Start agentic-playwright-mcp, or set JEV_E2E=1";
+
+test("a two-step series stops on rate_limit, stays resumable, and resume skips completed work", { timeout: 90_000, skip }, async () => {
   const stub = await listen(failWith(429, '{"error":"rate limit exceeded"}'));
   const base = loadConfig();
   const config = {
@@ -110,7 +132,7 @@ test("a two-step series stops on rate_limit, stays resumable, and resume skips c
   }
 });
 
-test("proxy interstitial is blocked, not a page reject, and resumable", { timeout: 90_000 }, async () => {
+test("proxy interstitial is blocked, not a page reject, and resumable", { timeout: 90_000, skip }, async () => {
   const stub = await listen(
     failWith(200, "<!DOCTYPE html><html>Proceed with caution</html>", "text/html"),
   );
