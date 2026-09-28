@@ -291,7 +291,7 @@ export interface ServerOptions {
 
 export const createJevServer = (options: ServerOptions = {}): McpServer => {
   const server = new McpServer(
-    { name: "jev", version: "0.2.0" },
+    { name: "jev", version: "0.2.1" },
     { instructions: INSTRUCTIONS },
   );
 

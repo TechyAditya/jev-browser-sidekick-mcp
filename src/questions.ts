@@ -188,6 +188,32 @@ export const buildBlockerQuestions = (task: string): Questions => ({
 });
 
 /**
+ * The harness spotted words a sign-in wall or a challenge uses. Whether the
+ * page is really demanding one is a judgment, and a wrong yes stops a whole
+ * series, so Jev confirms it against the page before the step hands back.
+ */
+export const buildDemandQuestions = (
+  kind: "credentials" | "captcha",
+  task: string,
+  evidence: string[],
+): Questions => {
+  const what =
+    kind === "captcha"
+      ? "prove the user is human, with a challenge the user has to clear"
+      : "type a password, a one-time code, or another secret";
+  return {
+    demand: {
+      type: "noul",
+      instructions: `Task: ${task}. The harness found these on the page: ${evidence.join("; ")}. Judge one thing: is the page itself demanding that someone ${what} before it will go further? Read \`page_title\`, \`page_text\`, and \`page_elements\`. Words that merely appear in a headline, a story title, a link, or ordinary body text are not a demand.`,
+      criteria: {
+        true: `The page is demanding it now, and the task cannot go on until someone does it.`,
+        false: `The page is not demanding it. The words belong to page content, an unrelated control, or a part of the page the task does not touch.`,
+      },
+    },
+  };
+};
+
+/**
  * A loop ends on the page's own evidence, never on a control disappearing:
  * a site that redraws its list mid-round would otherwise read as finished.
  */

@@ -33,6 +33,7 @@ import {
   buildActionSpace,
   buildBlockerQuestions,
   buildControlQuestions,
+  buildDemandQuestions,
   buildLoopQuestions,
   buildOutcomeQuestions,
   buildQuestions,
@@ -88,6 +89,8 @@ const LOOP_ROUNDS_MAX = 50;
 const LOOP_STALL_LIMIT = 2;
 /** How sure Jev must be that the page shows the loop's condition. */
 const LOOP_DONE_NOUL = 0.6;
+/** How sure Jev must be that a page really demands a secret or a human check. */
+const DEMAND_NOUL = 0.6;
 
 /** The series motive: an explicit goal, or the planned tasks joined. */
 const seriesMotive = (group: PlannedGroup): string =>
@@ -710,6 +713,9 @@ const runTask = async (
   let currentTitle = ctx.currentTitle;
   // Refs that failed once are stale; stop offering them.
   const deadRefs = new Set<string>();
+  // Page states where Jev has already said a sign-in or challenge suspicion
+  // was only page content. Re-asking on an unchanged page buys nothing.
+  const judgedDemands = new Map<string, boolean>();
   let retries = 0;
   const taskDeadline = createDeadline(Math.min(config.taskTimeoutMs, ctx.deadline.left()));
 
@@ -856,16 +862,49 @@ const runTask = async (
 
     // A password, a one-time code, or a captcha is the parent's call, never
     // this server's. The tab stays open, so the parent can finish it there.
+    //
+    // The words are only a suspicion: a Hacker News story titled "Solving a
+    // corn puzzle with CP-SAT" stopped a whole series as a captcha. Jev reads
+    // the page and confirms, and the step carries on when it says no. The
+    // answer is cached per page, so a series pays for it once per page state.
     const demand = secretDemand(visible);
-    if (demand) {
-      return {
-        status: "blocked",
-        summary: `the page asks for ${demand === "captcha" ? "a human check" : "a secret"}`,
-        reason: demand,
+    if (demand && judgedDemands.get(`${demand.kind}:${snapSignature(snap)}`) !== false) {
+      const real = await askDemandReal({
+        browser,
+        jev,
+        config,
+        task,
+        kind: demand.kind,
+        evidence: demand.evidence,
+        motive: ctx.motive,
+        priorResults: ctx.priorResults,
+        targetId,
         url: currentUrl,
         title: currentTitle,
-        targetId,
-      };
+        deadline: ctx.deadline,
+        trace: ctx.trace,
+        usage: ctx.usage,
+      });
+      judgedDemands.set(`${demand.kind}:${snapSignature(snap)}`, real >= DEMAND_NOUL);
+      if (real >= DEMAND_NOUL) {
+        return {
+          status: "blocked",
+          summary: `the page asks for ${demand.kind === "captcha" ? "a human check" : "a secret"} (noul=${real.toFixed(2)})`,
+          reason: demand.kind,
+          url: currentUrl,
+          title: currentTitle,
+          targetId,
+        };
+      }
+      ctx.trace.record({
+        kind: "note",
+        name: "demand.dismissed",
+        group: ctx.groupId,
+        task,
+        kindOf: demand.kind,
+        evidence: demand.evidence,
+        noul: real,
+      });
     }
 
     const actionButtons = visible.filter(
@@ -1602,6 +1641,62 @@ const askLoopDone = async (ctx: {
       throw isEndpointError(error) ? error : classifyProviderError(error);
     }
     // An unreadable page is not evidence that the work is finished.
+    return 0;
+  }
+};
+
+/** Enough of a snapshot to tell one page state from the next. */
+const snapSignature = (snap: { url?: string; elements: PageElement[] }): string =>
+  `${snap.url ?? ""}#${snap.elements.length}`;
+
+/**
+ * The harness saw sign-in or challenge words. Is the page really demanding
+ * one? A wrong yes hands back a series that could have finished, so Jev reads
+ * the page before the step stops.
+ */
+const askDemandReal = async (ctx: {
+  browser: PlaywrightSession;
+  jev: JevClient;
+  config: JevConfig;
+  task: string;
+  kind: "credentials" | "captcha";
+  evidence: string[];
+  motive: string;
+  priorResults: TaskResult[];
+  targetId: string;
+  url: string;
+  title: string;
+  deadline: Deadline;
+  trace: Trace;
+  usage: UsageTotals;
+}): Promise<number> => {
+  const state = await pageState(
+    ctx.browser,
+    ctx.targetId,
+    {
+      motive: ctx.motive,
+      steps_done: formatStepsDone(ctx.priorResults) || null,
+      current_task: ctx.task,
+      found: ctx.evidence,
+    },
+    ctx.evidence,
+    { url: ctx.url, title: ctx.title },
+  );
+  try {
+    const questions = buildDemandQuestions(ctx.kind, ctx.task, ctx.evidence);
+    const decision = await withTimeout(
+      ctx.jev.decide(state as EntryType, questions),
+      ctx.deadline.cap(ctx.config.callTimeoutMs),
+      "jev demand",
+    );
+    addUsage(ctx.usage, decision.usage, "decision");
+    ctx.trace.record({ kind: "decision", name: "demand", state, questions, answers: decision.answers });
+    return noulOf(decision.answers, "demand");
+  } catch (error) {
+    if (isEndpointError(error) || error instanceof TimeoutError) {
+      throw isEndpointError(error) ? error : classifyProviderError(error);
+    }
+    // No answer is no confirmation, and the page keeps its words either way.
     return 0;
   }
 };

@@ -188,10 +188,26 @@ export type SecretKind = "credentials" | "captcha";
 export const isSecretField = (el: PageElement): boolean =>
   isTypable(el) && SECRET_RE.test(`${el.name} ${el.value ?? ""}`);
 
-/** What the page is demanding before it will go further, if anything. */
-export const secretDemand = (elements: PageElement[]): SecretKind | undefined => {
-  if (elements.some((el) => CAPTCHA_RE.test(el.name))) return "captcha";
-  if (elements.some(isSecretField)) return "credentials";
+/**
+ * What the page might be demanding before it will go further.
+ *
+ * This is a suspicion, not a verdict. The words alone prove nothing: a news
+ * story titled "Solving a corn puzzle with CP-SAT" carries the same word a
+ * challenge does, and stopping a whole series on that is worse than the miss
+ * it guards against. Jev reads the page and confirms before the step hands
+ * back, so this side stays broad and cheap.
+ */
+export const secretDemand = (
+  elements: PageElement[],
+): { kind: SecretKind; evidence: string[] } | undefined => {
+  const challenge = elements.filter((el) => CAPTCHA_RE.test(el.name));
+  if (challenge.length) {
+    return { kind: "captcha", evidence: challenge.slice(0, 4).map(describeElement) };
+  }
+  const secret = elements.filter(isSecretField);
+  if (secret.length) {
+    return { kind: "credentials", evidence: secret.slice(0, 4).map(describeElement) };
+  }
   return undefined;
 };
 

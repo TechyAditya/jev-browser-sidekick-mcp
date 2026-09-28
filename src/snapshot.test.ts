@@ -36,22 +36,26 @@ test("labels add-to-cart for a chooser", () => {
   assert.match(describeElement({ ref: "e1", role: "button", name: "Add to cart" }), /^ADD /);
 });
 
-test("a secret field or a human check hands the page back", () => {
+test("a secret field or a human check is suspected, with what raised it", () => {
+  assert.equal(secretDemand([{ ref: "e1", role: "textbox", name: "Password" }])?.kind, "credentials");
   assert.equal(
-    secretDemand([{ ref: "e1", role: "textbox", name: "Password" }]),
+    secretDemand([{ ref: "e2", role: "textbox", name: "Enter the OTP sent to your phone" }])?.kind,
     "credentials",
   );
-  assert.equal(
-    secretDemand([{ ref: "e2", role: "textbox", name: "Enter the OTP sent to your phone" }]),
-    "credentials",
-  );
-  assert.equal(
-    secretDemand([{ ref: "e3", role: "checkbox", name: "I'm not a robot" }]),
-    "captcha",
-  );
+  const robot = secretDemand([{ ref: "e3", role: "checkbox", name: "I'm not a robot" }]);
+  assert.equal(robot?.kind, "captcha");
+  assert.match(robot?.evidence[0] ?? "", /not a robot/i);
+
   // A link about passwords is not a field asking for one.
   assert.equal(secretDemand([{ ref: "e4", role: "link", name: "Forgot password?" }]), undefined);
   assert.equal(secretDemand([{ ref: "e5", role: "textbox", name: "Search" }]), undefined);
+
+  // Prose carrying the word is still raised here, and Jev settles it. A story
+  // title took a whole Hacker News series down as a captcha.
+  const story = secretDemand([
+    { ref: "e6", role: "link", name: "Solving a corn puzzle with CP-SAT" },
+  ]);
+  assert.equal(story?.kind, "captcha");
 });
 
 test("proof text ignores case and spacing", () => {

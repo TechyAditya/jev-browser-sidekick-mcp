@@ -93,6 +93,20 @@ const INERT = `<!doctype html><html><head><title>Loop fixture inert</title></hea
 <p>This page never finishes anything.</p>
 </body></html>`;
 
+/**
+ * A news list whose story titles carry the words a challenge uses. Hacker
+ * News ran exactly this and the whole series came back blocked as a captcha.
+ */
+const PROSE = `<!doctype html><html><head><title>Fixture news</title></head><body>
+<h1>Today's stories</h1>
+<ol>
+  <li><a href="#s1">Solving a corn puzzle with CP-SAT</a></li>
+  <li><a href="#s2">The captcha industry is worth billions</a></li>
+  <li><a href="#s3">Why the robot check will not save you</a></li>
+</ol>
+<button id="more">More</button>
+</body></html>`;
+
 /** A product already in the cart: the Add control is gone, the outcome is shown. */
 const ADDED = `<!doctype html><html><head><title>Colgate toothpaste</title></head><body>
 <h1>Colgate toothpaste</h1>
@@ -168,6 +182,27 @@ test("a loop that changes nothing stops at its ceiling", { timeout: 150_000, ski
     assert.notEqual(loop.status, "completed");
     assert.ok((loop.rounds ?? 0) <= 3, `rounds ${loop.rounds} above the ceiling`);
     assert.match(loop.summary, /round/i);
+  } finally {
+    await page.close();
+  }
+});
+
+test("words in a story title are not a challenge", { timeout: 150_000, skip }, async (t) => {
+  const page = await serve(PROSE);
+  try {
+    const result = await runAction({
+      groups: [{ id: "prose", startUrl: page.url, tasks: ["click More"] }],
+      timeoutMs: 90_000,
+      debug: true,
+    });
+
+    if (skipOnOutage(t, result)) return;
+    const step = result.groups?.[0]?.tasks[0];
+    assert.ok(step, "step result");
+    // The harness still raises the suspicion. Jev reads the page and says no,
+    // so the step goes on to press the control instead of handing back.
+    assert.notEqual(step.reason, "captcha");
+    assert.equal(step.status, "completed", step.summary);
   } finally {
     await page.close();
   }

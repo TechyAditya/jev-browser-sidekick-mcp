@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-09-28
+
+### Fixed
+
+- A page that merely mentions a sign-in or a challenge no longer stops a step.
+  The words are a suspicion, and Jev reads the page and confirms the demand
+  before the step hands back. A Hacker News story titled "Solving a corn puzzle
+  with CP-SAT" blocked a whole series as a captcha; the same run now presses the
+  control it was asked for. The answer is cached per page state, so a series
+  pays for the check once per page rather than once per attempt.
+
 ## [0.2.0] - 2026-09-28
 
 ### Added

@@ -272,6 +272,8 @@ These reasons come back as `blocked` with a handoff, because you own the same ta
 | `credentials` | Asking for a password or a one-time code  |
 | `captcha`     | Asking the user to prove they are a human |
 
+Finding the words and believing them are separate. The harness spots the words a sign-in wall or a challenge uses, and Jev reads the page and confirms the page is really demanding one. A news story titled "Solving a corn puzzle with CP-SAT" carries the same word a challenge does, and stopping a series on that costs more than the check saves.
+
 This server never fills a password, a one-time code, or a captcha itself. Type the value in the shared tab, hand it to the user, or stop. Pass ordinary strings such as an email or a postcode in `values`.
 
 A missing control is not `blocked`. It is `rejected` with `no_control` or `no_match`, as in the reason table above.
