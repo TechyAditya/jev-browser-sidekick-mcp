@@ -1,5 +1,12 @@
 import type { Questions } from "./jev.js";
-import { describeElement, isClickable, isSelectable, isTypable, type PageElement } from "./snapshot.js";
+import {
+  describeElement,
+  isClickable,
+  isSelectable,
+  isTypable,
+  nearestTitle,
+  type PageElement,
+} from "./snapshot.js";
 
 export const OPERATIONS = [
   "CLICK",
@@ -29,7 +36,7 @@ export interface ActionSpace {
  * condition. https://docs.typesafe.ai/model-jaggedness/jev-1.13
  */
 const clickInstruction = (task: string): string =>
-  `Task: ${task}. Choose the one element to click next to finish that task. Rows marked ADD add the item to the cart. Rows marked PAY open checkout. Do not choose an advertisement or a different product.`;
+  `Task: ${task}. Choose the one element to click next to finish that task. Rows marked ADD add the item to the cart. Rows marked PAY open checkout. Do not choose an advertisement or a different product. Choose ${NO_CONTROL} only when none of the listed elements carries out that task.`;
 
 const typeInstruction = (task: string): string =>
   `Task: ${task}. Choose the one text field to type the search words into.`;
@@ -46,10 +53,16 @@ const fileInstruction = (task: string): string =>
 const operationInstruction = (task: string): string =>
   `Task: ${task}. Choose the one action to take next on this page.`;
 
-const criteriaFor = (elements: PageElement[]): Record<string, string> => {
+/** Chosen when no control in the list does the task. */
+export const NO_CONTROL = "none";
+
+const criteriaFor = (
+  elements: PageElement[],
+  all: PageElement[] = elements,
+): Record<string, string> => {
   const criteria: Record<string, string> = {};
   for (const el of elements) {
-    criteria[el.ref] = describeElement(el);
+    criteria[el.ref] = describeCandidate({ ...el, near: nearestTitle(all, el) });
   }
   return criteria;
 };
@@ -111,9 +124,6 @@ const OP_NOTE: Partial<Record<Operation, string>> = {
   PRESS_ENTER: "Press Enter to submit the text just typed.",
 };
 
-/** Chosen when no control in the list does the task. */
-export const NO_CONTROL = "none";
-
 /** The option label for the nth candidate. Code maps it back to the element. */
 export const controlOption = (index: number): string => `c${index + 1}`;
 
@@ -170,9 +180,15 @@ export const buildBlockerQuestions = (task: string): Questions => ({
   },
 });
 
-export const buildQuestions = (space: ActionSpace, ops: Operation[], task: string): Questions => {
+export const buildQuestions = (
+  space: ActionSpace,
+  ops: Operation[],
+  task: string,
+  pageElements?: PageElement[],
+): Questions => {
   // Page kind and readiness come from the URL and from waits in code, not from Jev.
   // https://docs.typesafe.ai/model-jaggedness/jev-1.13
+  const page = pageElements ?? space.click;
   const questions: Questions = {
     operation: {
       type: "choice",
@@ -209,21 +225,24 @@ export const buildQuestions = (space: ActionSpace, ops: Operation[], task: strin
     questions.click_target = {
       type: "choice",
       instructions: clickInstruction(task),
-      criteria: criteriaFor(space.click),
+      criteria: {
+        ...criteriaFor(space.click, page),
+        [NO_CONTROL]: "None of these elements does the task.",
+      },
     };
   }
   if (space.type.length && ops.includes("TYPE_TEXT")) {
     questions.type_target = {
       type: "choice",
       instructions: typeInstruction(task),
-      criteria: criteriaFor(space.type),
+      criteria: criteriaFor(space.type, page),
     };
   }
   if (space.select.length && ops.includes("SELECT")) {
     questions.select_target = {
       type: "choice",
       instructions: typeInstruction(task),
-      criteria: criteriaFor(space.select),
+      criteria: criteriaFor(space.select, page),
     };
   }
   if (space.urls.length && ops.includes("NAVIGATE")) {

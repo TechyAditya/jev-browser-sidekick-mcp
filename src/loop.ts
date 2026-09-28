@@ -39,13 +39,13 @@ import {
 import {
   actionNearEntry,
   clip,
-  describeElement,
   elementTable,
   proofContext,
   isClickable,
   isNoise,
   isSecretField,
-  looksLikeList,
+  looksLikeSearchResults,
+  mentions,
   pageShows,
   prioritize,
   resultCandidates,
@@ -72,6 +72,26 @@ const TASK_STEPS = 12;
 const STATE_CAP = 4000;
 /** A read step is for checking an outcome, not for scraping a whole site. */
 const READ_CAP = 6000;
+/** Prior outcomes stay short so motive + history stays near 1% of the state budget. */
+const STEPS_DONE_CAP = 600;
+
+/** The series motive: an explicit goal, or the planned tasks joined. */
+const seriesMotive = (group: PlannedGroup): string =>
+  clip((group.goal?.trim() || group.tasks.join("; ")).trim(), 240);
+
+/** One short clause per finished task so Jev sees why earlier steps landed. */
+const formatStepsDone = (prior: TaskResult[]): string => {
+  if (!prior.length) return "";
+  return clip(
+    prior
+      .map((row) => {
+        const why = row.reason ? ` ${row.reason}` : "";
+        return `${row.status}${why}: ${clip(row.summary || row.goal, 80)}`;
+      })
+      .join(" | "),
+    STEPS_DONE_CAP,
+  );
+};
 
 const noUsage = (): UsageTotals => ({
   inputTokens: 0,
@@ -347,6 +367,8 @@ const runGroup = async (ctx: {
           task,
           groupId: group.id,
           tabGroupId,
+          motive: seriesMotive(group),
+          priorResults: taskResults,
           fileNotes,
           usage,
           budget: createContextBudget(),
@@ -525,6 +547,10 @@ const runTask = async (ctx: {
   groupId: string;
   /** The browser's own tab group. Scopes every tab lookup to this series. */
   tabGroupId?: string;
+  /** Why this series exists: group goal or the planned task list. */
+  motive: string;
+  /** Outcomes of earlier tasks in this series. Empty on the first task. */
+  priorResults: TaskResult[];
   availableFiles: string[];
   sharedUrls: string[];
   allow: ReturnType<typeof buildAllowlist>;
@@ -697,13 +723,20 @@ const runTask = async (ctx: {
       };
     }
     const hints = [intent.subject, ...values.map((row) => row.text)].filter(Boolean);
-    // Each task is its own loop; never read another task's history.
+    // Operations inside one task stay scoped to that task; prior tasks in the
+    // series land in motive/steps_done so Jev can refuse a redundant step.
     const taskSteps = ctx.steps.filter((row) => row.task === task);
     const lastOp = taskSteps.at(-1)?.operation;
     const lastFailed = Boolean(taskSteps.at(-1)?.detail?.startsWith("failed"));
     const visible = snap.elements.filter(
       (el) => !isNoise(el) && !el.disabled && !deadRefs.has(el.ref),
     );
+    const stepsDone = formatStepsDone(ctx.priorResults);
+    const decisionContext = {
+      motive: ctx.motive,
+      steps_done: stepsDone || null,
+      current_task: task,
+    };
 
     // A password, a one-time code, or a captcha is the parent's call, never
     // this server's. The tab stays open, so the parent can finish it there.
@@ -728,6 +761,29 @@ const runTask = async (ctx: {
     // wander off to whichever product Jev picked out of the rail.
     const onList = intent.kind === "pick";
 
+    // An article that already names the subject is not a list of results.
+    // Offering its content links turns "open the result" into a wrong click.
+    if (intent.kind === "pick") {
+      const subject = intent.subject || "";
+      const onSubjectPage =
+        Boolean(subject) &&
+        mentions(currentTitle, subject) &&
+        !looksLikeSearchResults(currentUrl, currentTitle);
+      const entries = onSubjectPage ? [] : resultCandidates(visible, [subject].filter(Boolean));
+      if (onSubjectPage || !entries.length) {
+        return {
+          status: "rejected",
+          summary: onSubjectPage
+            ? `this page is not a list of results for "${clip(subject || task, 40)}"`
+            : `no entry on this page matches "${clip(subject || task, 40)}"`,
+          reason: "no_match",
+          url: currentUrl,
+          title: currentTitle,
+          targetId,
+        };
+      }
+    }
+
     // The task named a button. The harness finds every control carrying those
     // words; which one is really it stays a judgment, so Jev picks.
     if (needAction && !acted && !onList) {
@@ -745,6 +801,8 @@ const runTask = async (ctx: {
         candidates,
         url: currentUrl,
         title: currentTitle,
+        motive: ctx.motive,
+        stepsDone,
         deadline: ctx.deadline,
         trace: ctx.trace,
         usage: ctx.usage,
@@ -782,7 +840,8 @@ const runTask = async (ctx: {
         trace: ctx.trace,
         usage: ctx.usage,
         state: JSON.stringify({
-          task,
+          ...decisionContext,
+          wanted: intent.subject || null,
           page_url: shortUrl(currentUrl),
           page_title: clip(currentTitle, 60),
           page_elements: elementTable(prioritize(visible, 36, hints), 36),
@@ -810,12 +869,14 @@ const runTask = async (ctx: {
         });
         if (again.ok) continue;
       }
+      // Fall through with noClick so scroll/wait can reveal the control, but
+      // nothing else on the page can be pressed in its place.
     }
     // The questions carry every ref and label, so the state stays a few named fields.
     // https://docs.typesafe.ai/concepts/state
     const buildLive = (rows: typeof snap.elements): string =>
       JSON.stringify({
-        task,
+        ...decisionContext,
         wanted: intent.subject || null,
         page_url: shortUrl(currentUrl),
         page_title: clip(currentTitle, 60),
@@ -828,8 +889,52 @@ const runTask = async (ctx: {
     // "open the result" into "click anything", which is how a footer link and
     // a filter facet came back as results.
     const pool = entries.length ? entries : intent.kind === "pick" ? [] : visible;
+    if (intent.kind === "pick" && !pool.length) {
+      return {
+        status: "rejected",
+        summary: `no entry on this page matches "${clip(intent.subject || task, 40)}"`,
+        reason: "no_match",
+        url: currentUrl,
+        title: currentTitle,
+        targetId,
+      };
+    }
     // Only force a click when the page really offers choices and the last one worked.
     const mustChoose = !lastFailed && entries.length >= 2;
+
+    // Search with no field and no way to reveal one is a missing control.
+    if (intent.kind === "search" && !typed) {
+      const hasType = visible.some((el) => el.role === "searchbox" || el.role === "textbox");
+      if (!hasType) {
+        const again = await searchOnPage(browser, targetId, intent.query ?? intent.subject);
+        ctx.steps.push({
+          step: ctx.steps.filter((row) => row.step > 0).length + 1,
+          group: ctx.groupId,
+          task,
+          operation: "TYPE_TEXT",
+          detail: `harness ${again.detail}`,
+        });
+        if (again.ok) {
+          typed = true;
+          const after = await browser.snapshot(targetId).catch(() => undefined);
+          return {
+            status: "completed",
+            summary: `searched ${intent.query ?? intent.subject}`,
+            url: after?.url ?? currentUrl,
+            title: after?.title ?? currentTitle,
+            targetId,
+          };
+        }
+        return {
+          status: "rejected",
+          summary: `no search box on this page`,
+          reason: "no_control",
+          url: currentUrl,
+          title: currentTitle,
+          targetId,
+        };
+      }
+    }
 
     let elements = prioritize(pool, ctx.budget.elementLimit(), hints, {
       hideSearch: typed,
@@ -854,7 +959,7 @@ const runTask = async (ctx: {
         // waiting can still reveal that control; clicking elsewhere cannot.
         noClick: needAction && !onList,
       });
-      questions = buildQuestions(space, ops, task);
+      questions = buildQuestions(space, ops, task, visible);
       // Old pages are droppable. The live page is pinned.
       // Only the live snapshot goes to Jev. A stale page is a distractor.
       state = ctx.budget.fit([{ text: clip(buildLive(elements), STATE_CAP), pin: true }], questions);
@@ -924,7 +1029,53 @@ const runTask = async (ctx: {
           targetId,
         };
       }
+      // Missing search box / empty decision is the page's answer, not a handoff.
+      if (intent.kind === "search") {
+        return {
+          status: "rejected",
+          summary: `no search box on this page (${verdict.reason})`,
+          reason: "no_control",
+          url: currentUrl,
+          title: currentTitle,
+          targetId,
+        };
+      }
+      if (intent.kind === "pick") {
+        return {
+          status: "rejected",
+          summary: `no entry on this page matches "${clip(intent.subject || task, 40)}" (${verdict.reason})`,
+          reason: "no_match",
+          url: currentUrl,
+          title: currentTitle,
+          targetId,
+        };
+      }
       return { status: "blocked", summary: verdict.reason, url: currentUrl, title: currentTitle, targetId };
+    }
+
+    // Standing none: refuse rather than press an unrelated control.
+    if (
+      verdict.operation === "CLICK" &&
+      (verdict.target === NO_CONTROL || !verdict.target)
+    ) {
+      if (intent.kind === "pick") {
+        return {
+          status: "rejected",
+          summary: `no entry on this page matches "${clip(intent.subject || task, 40)}"`,
+          reason: "no_match",
+          url: currentUrl,
+          title: currentTitle,
+          targetId,
+        };
+      }
+      return {
+        status: "rejected",
+        summary: `no control on this page does "${clip(actionLabels[0] ?? task, 40)}"`,
+        reason: "no_control",
+        url: currentUrl,
+        title: currentTitle,
+        targetId,
+      };
     }
 
     const sig = signature(verdict.operation, verdict.target);
@@ -1144,6 +1295,8 @@ const pickControl = async (ctx: {
   candidates: LabelCandidate[];
   url: string;
   title: string;
+  motive: string;
+  stepsDone: string;
   deadline: Deadline;
   trace: Trace;
   usage: UsageTotals;
@@ -1157,7 +1310,9 @@ const pickControl = async (ctx: {
   // state built from that list shows a page where the option does not exist,
   // and the honest answer to "which of these" becomes "none".
   const state = JSON.stringify({
-    task: ctx.task,
+    motive: ctx.motive,
+    steps_done: ctx.stepsDone || null,
+    current_task: ctx.task,
     page_url: shortUrl(ctx.url),
     page_title: clip(ctx.title, 60),
     controls: Object.fromEntries(

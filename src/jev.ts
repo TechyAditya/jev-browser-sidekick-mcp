@@ -115,6 +115,47 @@ const typesafeClient = (config: JevConfig): TypeSafeClient =>
     logger: stderrLogger,
   });
 
+/**
+ * Proxies and firewalls sometimes return an HTML page with a 200. Treating
+ * that as a decision yields empty answers and a silent zero-token "success".
+ */
+export const parseDecisionBody = (
+  response: unknown,
+  questionCount: number,
+): { answers: Record<string, Answer>; usage: DecisionUsage; model?: string } => {
+  let body: unknown = response;
+  if (typeof body === "string") {
+    const trimmed = body.trim();
+    if (!trimmed || trimmed.startsWith("<")) {
+      throw new Error("TypeSafe returned HTML instead of a decision");
+    }
+    try {
+      body = JSON.parse(trimmed);
+    } catch {
+      throw new Error("TypeSafe returned a non-JSON body");
+    }
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error("TypeSafe returned a non-object decision");
+  }
+  const raw = body as {
+    answers?: Record<string, unknown>;
+    usage?: unknown;
+    model?: string;
+  };
+  if (!raw.answers || typeof raw.answers !== "object" || Array.isArray(raw.answers)) {
+    throw new Error("TypeSafe response missing answers");
+  }
+  const answers: Record<string, Answer> = {};
+  for (const [id, value] of Object.entries(raw.answers)) {
+    answers[id] = normalizeAnswer(value);
+  }
+  if (questionCount > 0 && Object.keys(answers).length === 0) {
+    throw new Error("TypeSafe returned empty answers");
+  }
+  return { answers, usage: usageFrom(raw.usage), model: raw.model };
+};
+
 const decideWithTypeSafe = async (
   client: TypeSafeClient,
   state: EntryType,
@@ -125,6 +166,7 @@ const decideWithTypeSafe = async (
   const payload = { model, state, questions };
   const started = Date.now();
   const response = await client.systemOne(payload);
+  const parsed = parseDecisionBody(response, Object.keys(questions).length);
   trace.record({
     kind: "request",
     name: "typesafe.systemOne",
@@ -134,16 +176,7 @@ const decideWithTypeSafe = async (
     payload,
     response,
   });
-  const raw = response as unknown as {
-    answers?: Record<string, unknown>;
-    usage?: unknown;
-    model?: string;
-  };
-  const answers: Record<string, Answer> = {};
-  for (const [id, value] of Object.entries(raw.answers ?? {})) {
-    answers[id] = normalizeAnswer(value);
-  }
-  return { answers, usage: usageFrom(raw.usage), model: raw.model };
+  return parsed;
 };
 
 const decideWithOpenRouterSdk = async (
@@ -166,6 +199,7 @@ const decideWithOpenRouterSdk = async (
   };
   const started = Date.now();
   const response = await client.alpha.decisions.create({ decisionsRequest });
+  const parsed = parseDecisionBody(response, Object.keys(questions).length);
   trace.record({
     kind: "request",
     name: "openrouter.decisions.create",
@@ -175,16 +209,7 @@ const decideWithOpenRouterSdk = async (
     payload: decisionsRequest,
     response,
   });
-  const raw = response as unknown as {
-    answers?: Record<string, unknown>;
-    usage?: unknown;
-    model?: string;
-  };
-  const answers: Record<string, Answer> = {};
-  for (const [id, value] of Object.entries(raw.answers ?? {})) {
-    answers[id] = normalizeAnswer(value);
-  }
-  return { answers, usage: usageFrom(raw.usage), model: raw.model };
+  return parsed;
 };
 
 /** TypeSafeClient.systemOne. On openrouter failure, OpenRouter.alpha.decisions.create. */

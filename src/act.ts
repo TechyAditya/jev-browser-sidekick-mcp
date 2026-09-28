@@ -357,29 +357,67 @@ export const showsChoice = async (
   return { ok: false, url, title, why: "the page neither changed nor shows it" };
 };
 
+/** A control that typically reveals a collapsed search field. */
+const findSearchReveal = (elements: PageElement[]): PageElement | undefined =>
+  elements.find(
+    (row) =>
+      !row.disabled &&
+      (row.role === "button" || row.role === "link") &&
+      /^(search|find)$/i.test(row.name.trim()),
+  ) ??
+  elements.find(
+    (row) =>
+      !row.disabled &&
+      row.role === "button" &&
+      /^search\b/i.test(row.name.trim()) &&
+      row.name.trim().length < 24,
+  );
+
 /** Type a query into the page's own search box. Works without site knowledge. */
 export const searchOnPage = async (
   browser: PlaywrightSession,
   targetId: string,
   query: string,
 ): Promise<{ ok: boolean; detail: string; ref?: string }> => {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  let revealed = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     const snap = await browser.snapshot(targetId).catch(() => undefined);
     const box =
       snap?.elements.find((row) => row.role === "searchbox" && !row.disabled) ??
-      snap?.elements.find((row) => isTypable(row) && !row.disabled);
-    if (!box) return { ok: false, detail: "no search box on this page" };
-    try {
-      await browser.type(targetId, box.ref, query, true);
-      await browser.settle(targetId, 1800);
-      return { ok: true, detail: `typed ${JSON.stringify(query)} + enter`, ref: box.ref };
-    } catch (error) {
-      if (attempt === 1) {
-        const message = error instanceof Error ? error.message : String(error);
-        return { ok: false, detail: `failed: ${message.slice(0, 120)}` };
+      snap?.elements.find((row) => isTypable(row) && !isShortcutDecoy(row) && !row.disabled);
+    if (box) {
+      try {
+        await browser.type(targetId, box.ref, query, true);
+        await browser.settle(targetId, 1800);
+        return {
+          ok: true,
+          detail: revealed
+            ? `revealed search, typed ${JSON.stringify(query)} + enter`
+            : `typed ${JSON.stringify(query)} + enter`,
+          ref: box.ref,
+        };
+      } catch (error) {
+        if (attempt >= 2) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { ok: false, detail: `failed: ${message.slice(0, 120)}` };
+        }
+        await browser.settle(targetId, 900).catch(() => undefined);
+        continue;
       }
-      await browser.settle(targetId, 900).catch(() => undefined);
     }
+    // Some sites hide the field behind a Search control until it is pressed.
+    if (!revealed && snap?.elements.length) {
+      const reveal = findSearchReveal(snap.elements);
+      if (reveal) {
+        const outcome = await clickStable(browser, targetId, reveal);
+        revealed = true;
+        if (outcome.ok) {
+          await browser.settle(targetId, 900);
+          continue;
+        }
+      }
+    }
+    return { ok: false, detail: "no search box on this page" };
   }
   return { ok: false, detail: "search failed" };
 };

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-09-28
+
+### Fixed
+
+- When a step's control is absent, return `rejected` with `no_control` / `no_match`
+  instead of clicking an unrelated element. Click targets now carry a standing
+  `none` option, and pick steps on a subject page that is not a result list
+  refuse before calling Jev.
+- Missing search box and empty "no operation returned" decisions report
+  `rejected` / `no_control`, not `blocked` (which is reserved for credentials,
+  captchas, and sign-in).
+- Search recovers when the field is collapsed behind a Search control: click to
+  reveal, then type.
+- Non-JSON / HTML TypeSafe responses throw so OpenRouter fallback can run, and
+  empty answers are no longer counted as a successful zero-token decision.
+- Result candidates require the subject (`mentions`), and no longer fall back to
+  every long link on the page.
+
+### Added
+
+- Decision state carries `motive`, `steps_done`, and `current_task` so Jev sees
+  why the series exists and what earlier steps already did.
+- Click / type option text includes a sentence of context (neighbouring title)
+  rather than a bare label.
+
 ## [0.1.2] - 2026-09-27
 
 ### Fixed

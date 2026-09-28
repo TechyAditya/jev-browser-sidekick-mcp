@@ -5,10 +5,12 @@ import {
   describeElement,
   isTypable,
   looksLikeAdd,
+  looksLikeSearchResults,
   nearestTitle,
   pageShows,
   parseSnapshot,
   proofContext,
+  resultCandidates,
   secretDemand,
   type PageElement,
 } from "./snapshot.js";
@@ -99,4 +101,35 @@ test("proof carries its neighbours, so a rail cannot pass as a cart line", () =>
   assert.ok(found);
   assert.match(found, /also bought Colgate/);
   assert.equal(proofContext(empty, "Sensodyne"), undefined);
+});
+
+test("search-results pages are distinct from subject articles", () => {
+  assert.equal(
+    looksLikeSearchResults(
+      "https://en.wikipedia.org/w/index.php?search=Kolmogorov+complexity",
+      "Kolmogorov complexity - Search results - Wikipedia",
+    ),
+    true,
+  );
+  assert.equal(
+    looksLikeSearchResults(
+      "https://en.wikipedia.org/wiki/Kolmogorov_complexity",
+      "Kolmogorov complexity - Wikipedia",
+    ),
+    false,
+  );
+});
+
+test("result candidates require the subject, not any long link", () => {
+  const page: PageElement[] = [
+    { ref: "e1", role: "link", name: "Kolmogorov complexity" },
+    { ref: "e2", role: "link", name: "An Introduction to Kolmogorov Complexity and Its Applications" },
+    { ref: "e3", role: "link", name: "Further reading on information theory books" },
+  ];
+  const hits = resultCandidates(page, ["Kolmogorov complexity"]);
+  assert.deepEqual(
+    hits.map((row) => row.ref),
+    ["e1", "e2"],
+  );
+  assert.equal(resultCandidates(page, ["Shannon entropy"]).length, 0);
 });

@@ -36,3 +36,9 @@ test("a wait length is capped, never unbounded", () => {
   );
   assert.equal(verdict.kind === "act" && verdict.waitMs, 15_000);
 });
+
+test("missing operation is blocked for the caller to reclassify", () => {
+  const verdict = compose(answers({}), config, ctx);
+  assert.equal(verdict.kind, "blocked");
+  assert.equal(verdict.kind === "blocked" && verdict.reason, "no operation returned");
+});
