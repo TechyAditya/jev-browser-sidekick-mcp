@@ -4,6 +4,7 @@ dist-test/
 .env
 *.log
 .jev-run/
+.findings-*/
 .cart-*.jpg
 *.tgz
 .DS_Store

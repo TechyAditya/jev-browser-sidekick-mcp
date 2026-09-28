@@ -97,7 +97,6 @@ Start the `playwright` entry first, or just let the host start both. This server
 
 Jev picks among labelled options and returns typed answers. It does not read plans and does not write text, so you write the plan and each step hands Jev one choice.
 
-
 | Step                          | What it does                                   |
 | ----------------------------- | ---------------------------------------------- |
 | `search <words>`              | Puts the words in the page's own search box    |
@@ -109,7 +108,6 @@ Jev picks among labelled options and returns typed answers. It does not read pla
 | `read <thing>`                | Hands the page's own words back to you         |
 | `read the page title and url` | Answers "where am I" without the whole page    |
 
-
 Each step acts on one page. Use the words that appear on the screen, because Jev matches labels literally.
 
 Adding one item to a cart is three steps, one per page.
@@ -120,7 +118,7 @@ Adding one item to a cart is three steps, one per page.
 
 A single `add colgate toothpaste to cart` still runs, but it never leaves the results page, so it presses whatever on that page carries those words.
 
-Each step runs its own loop against the live page. The decision state also carries the series `motive` and a short `steps_done` line for each finished task in that series, so Jev can refuse a step that earlier work already satisfied. Parallel groups share nothing.
+Each step runs against the live page. The decision also sees the series `motive` and a short `steps_done` line for each finished task, so Jev can refuse a step that earlier work already covered. Groups running in parallel share nothing, so each one sees only its own motive and its own finished steps.
 
 ### Repeat a press until the page stops offering it
 
@@ -132,7 +130,7 @@ A repeat that gives up with controls still on the page returns `partial`, never 
 
 A step that names a control the page no longer carries comes back `rejected` with reason `no_control`. For example, once an item is in the cart, a product page can replace "Add to cart" with "Go to cart", so `click add to cart` finds nothing and says so.
 
-The server does not guess whether that means the work is already done. In testing, guessing it from the page marked steps finished that had never run. So a step that already looks satisfied still runs, and it still reports what happened. End the series with a `read` step and decide from the cart's own words.
+The server does not guess whether that means the work is already done. In testing, that guess marked steps finished that had never run. A step that already looks satisfied still runs, and it still reports what happened. End the series with a `read` step and decide from the cart's own words.
 
 ## Call run_action
 
@@ -164,25 +162,22 @@ Errands that do not depend on each other belong in `groups`, and they run at the
 }
 ```
 
-
-
 ## Read the result
 
 The result has `is_finished`, `targetIds`, `groups`, `status`, `summary`, and a `handoff` when something stopped. Each group has its own `tasks`, `steps`, and `counts`. `snapshot` appears only when you set `returnSnapshot`, and `usage`, `elapsedMs`, and per-step `ms` only when you set `debug`.
 
 Every step has its own status.
 
-
-| Status       | What it means                                                |
-| ------------ | ------------------------------------------------------------ |
-| `completed`  | The step did what it said                                    |
-| `partial`    | It did some of the work and stopped with more to do          |
-| `rejected`   | The page answered no. Read `reason`                          |
-| `blocked`    | The page wants something only you can give. Read `handoff`   |
-| `unverified` | Every step ran, and `expect` was missing from the final page |
-| `max_steps`  | The budget or the clock ran out                              |
-| `skipped`    | An earlier step in the series stopped this one               |
-
+| Status       | What it means                                                              |
+| ------------ | -------------------------------------------------------------------------- |
+| `completed`  | The step did what it said                                                  |
+| `partial`    | It did some of the work and stopped with more to do                        |
+| `rejected`   | The page answered no. Read `reason`                                        |
+| `blocked`    | Sign-in, password, captcha, or a proxy interstitial. Read `handoff`        |
+| `unverified` | The final step completed, and `expect` was missing from the page           |
+| `error`      | The Jev provider or the network failed. Read `reason` and `handoff`        |
+| `max_steps`  | The budget or the clock ran out                                            |
+| `skipped`    | An earlier step in the series stopped this one                             |
 
 A group's `status` is worst-case across its steps, so a group where eight of ten steps completed still reads as `rejected`. Read `counts` for what actually happened.
 
@@ -194,19 +189,17 @@ Later steps depend on earlier ones, so a step that does not complete ends its se
 
 ### Why a step was turned down
 
-
 | `reason`                            | Meaning                                                  |
 | ----------------------------------- | -------------------------------------------------------- |
-| `no_control`                        | Nothing on that page does what the step named            |
-| `no_match`                          | The list held no entry matching what the step named      |
+| `no_control`                        | A `click` or press found no control that does what the step named |
+| `no_match`                          | An `open the … result` step found no matching entry      |
 | `unavailable`                       | Out of stock, sold out, or not delivered here            |
 | `other_route`                       | The page offers a different route, such as other sellers |
 | `wrong_page`                        | The page is not about the wanted thing                   |
 | `not_ready`                         | The page had not finished loading                        |
 | `sign_in`, `credentials`, `captcha` | Returned as `blocked`, not `rejected`                    |
 
-
-
+A standing `none` choice that wins uses the same reasons: `no_control` for click or press, `no_match` for pick.
 
 ## Prove the run worked
 
@@ -216,13 +209,13 @@ A `completed` status is Jev's claim. Set `expect` to the text that proves it, an
 { "tasks": ["open the cart page"], "expect": "subtotal (3 items)" }
 ```
 
-Pick text that only the finished state produces. `Subtotal (3 items)` works. A product name does not, because shops repeat product names in recommendation rails, so the text matches even on an empty cart. The result quotes the words either side of the match in `proof`, so you can see which it matched.
+Pick text that only the finished state produces. `Subtotal (3 items)` works. A product name does not. Shops repeat product names in recommendation rails, so that text matches even on an empty cart. The result quotes the words either side of the match in `proof`, so you can see which it matched.
 
 ```json
 { "verified": true, "proof": "…All Carts Subtotal (3 items): ₹509.00 Proceed to Buy…" }
 ```
 
-The check runs only when every step completed. A series that stopped reports `proof: not checked`, rather than claiming the text was missing from a page it never reached.
+The check runs when the final step of the series completed, including under `noFail` after an earlier rejection. A series whose final step never ran reports `proof: not checked`, rather than claiming the text was missing from a page it never reached.
 
 ## Pick up a stopped run
 
@@ -245,8 +238,7 @@ The tab is still open and you already share it, so you can finish the step throu
 
 ## Pages that block a step
 
-`blocked` means only that the page wants something only you can give. The reasons are:
-
+These reasons come back as `blocked` with a handoff, because you own the same tab and can still act.
 
 | `reason`      | The page is                               |
 | ------------- | ----------------------------------------- |
@@ -254,10 +246,26 @@ The tab is still open and you already share it, so you can finish the step throu
 | `credentials` | Asking for a password or a one-time code  |
 | `captcha`     | Asking the user to prove they are a human |
 
+This server never fills a password, a one-time code, or a captcha itself. Type the value in the shared tab, hand it to the user, or stop. Pass ordinary strings such as an email or a postcode in `values`.
 
-Those three come back as `blocked` with a handoff, because you own the same tab and can still act. This server never fills a password, a one-time code, or a captcha itself. Type the value in the shared tab, hand it to the user, or stop. Pass ordinary strings such as an email or a postcode in `values`.
+A missing control is not `blocked`. It is `rejected` with `no_control` or `no_match`, as in the reason table above.
 
-A missing control is not `blocked`. When the page carries no control that does the step, or Jev picks the standing `none` option among the candidates, the step returns `rejected` with `no_control` or `no_match`. Other page answers such as `unavailable` or `wrong_page` also return `rejected`.
+## When the provider fails
+
+A fault in the Jev API or the network is not a page answer. The step returns `error` with a reason that names the cause. An HTTP proxy that returns HTML with status 200 is the exception: that comes back as `blocked` with reason `proxy_interstitial`, because only you can clear the proxy.
+
+| `reason`             | Typical cause                                      |
+| -------------------- | -------------------------------------------------- |
+| `rate_limit`         | HTTP 429                                           |
+| `auth`               | HTTP 401 or 403                                    |
+| `no_credits`         | HTTP 402, or a credits or quota message            |
+| `not_found`          | HTTP 404 for a model or endpoint                   |
+| `provider_outage`    | HTTP 5xx                                           |
+| `unreachable`        | Timeout, DNS failure, or connection refused        |
+| `proxy_interstitial` | HTTP 200 with a `text/html` body                   |
+| `bad_response`       | Non-JSON body or empty answers                     |
+
+The summary includes the HTTP status and a short provider message. The series stops even when `noFail` is set. `handoff.resumable` stays true when a tab exists, so you resume with that `targetId` and the remaining steps instead of redoing work that already finished.
 
 ## Keep a call short
 
@@ -271,16 +279,14 @@ A call your MCP client drops is the case worth avoiding. The browser work still 
 
 `usage` sums what each API response reported. Nothing in it is estimated.
 
-
 | Field          | Source                                                      |
 | -------------- | ----------------------------------------------------------- |
 | `inputTokens`  | `usage.input_tokens` on every Jev response                  |
 | `outputTokens` | `usage.output_tokens` on every Jev response                 |
 | `totalTokens`  | The two above, added                                        |
-| `decisions`    | Jev calls made                                              |
+| `decisions`    | Successful Jev calls. A failed decide does not count        |
 | `textCalls`    | Calls to the text model that fills a field Jev cannot write |
 | `costUsd`      | Present only when a provider returns a price                |
-
 
 TypeSafe returns tokens and no price, so `costUsd` is absent on a direct TypeSafe key and present through OpenRouter.
 
@@ -311,9 +317,9 @@ Nothing says the state has to be about code. If you are the sort of person who s
 
 ## What the server already handles
 
-Leave these out of the plan. The server waits for loads, follows a link that opens its own tab, recovers element refs that went stale between the snapshot and the click, and skips invisible controls that carry real labels.
+Leave these out of the plan. The server waits for loads, follows a link that opens its own tab, recovers element references that went stale between the snapshot and the click, and skips invisible controls that carry real labels.
 
-Finding a control and choosing it are separate. When a step names a control, the server collects every control on the page carrying those words, including ones drawn as plain text with no accessibility role. Jev picks one of them, or the standing `none` option when none fits. A pick step does the same over entry candidates that name the subject. When Jev chooses `none`, or the page offers no candidate, the step returns `rejected` with `no_control` or `no_match` instead of pressing something else.
+Finding a control and choosing it are separate. When a step names a control, the server collects every control on the page carrying those words, including ones drawn as plain text with no accessibility role. Jev picks one of them, or the standing `none` option when none fits. A pick step does the same over entry candidates that name the subject. When nothing fits, the step returns `rejected` instead of pressing something else.
 
 Jev reads text only, so this server works from the page's own text and takes no screenshots. A control drawn without text is found by its DOM text instead.
 

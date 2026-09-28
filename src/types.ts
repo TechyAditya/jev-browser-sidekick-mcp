@@ -5,6 +5,7 @@ export type Provider = "official" | "openrouter";
  * out of stock. It is an answer, not a failure of the run.
  * `unverified` means every step ran but `expect` was not on the final page.
  * `partial` means the step did some of its work and stopped with more to do.
+ * `error` means the Jev provider or transport failed, not the page.
  */
 export type RunStatus =
   | "completed"
@@ -17,7 +18,7 @@ export type RunStatus =
   /** Never ran, because an earlier step in the series did not complete. */
   | "skipped";
 
-/** Why a step stopped and handed the page back. */
+/** Why a page turned a step down. Distinct from endpoint faults. */
 export type BlockReason =
   | "credentials"
   | "captcha"
@@ -26,11 +27,25 @@ export type BlockReason =
   | "wrong_page"
   | "other_route"
   | "not_ready"
-  /** The page carries no control doing what the step named. */
+  /** A click or press step found no control that does what the step named. */
   | "no_control"
-  /** The list on the page holds no entry matching what the step named. */
+  /** A pick step found no matching entry, or Jev chose none among the candidates. */
   | "no_match"
   | "unknown";
+
+/** Why the Jev provider or network stopped the series. Not a page answer. */
+export type EndpointReason =
+  | "rate_limit"
+  | "auth"
+  | "no_credits"
+  | "not_found"
+  | "provider_outage"
+  | "unreachable"
+  | "proxy_interstitial"
+  | "bad_response";
+
+/** Page answer or provider fault carried on a stopped step and its handoff. */
+export type StopReason = BlockReason | EndpointReason;
 
 export interface TaskGroupSpec {
   /** Parent label for this tab's series. */
@@ -53,8 +68,8 @@ export interface TaskResult {
   goal: string;
   status: RunStatus;
   summary: string;
-  /** Why the page could not satisfy the step. Set when status is rejected or blocked. */
-  reason?: BlockReason;
+  /** Page answer or provider fault. Set when the step did not complete. */
+  reason?: StopReason;
   /** Wall time this step took. Set when debug is on. */
   ms?: number;
   /** What the page said. Set by a read step. */
@@ -66,7 +81,7 @@ export interface TaskResult {
  * type the password itself, ask the user, or call run_action again.
  */
 export interface Handoff {
-  /** The tab is still open and usable. */
+  /** The tab is still open. True after an endpoint fault so the caller can resume. */
   resumable: boolean;
   targetId?: string;
   groupId?: string;
@@ -75,7 +90,7 @@ export interface Handoff {
   /** The step that stopped. */
   stoppedAt: string;
   status: RunStatus;
-  reason?: BlockReason;
+  reason?: StopReason;
   /** Steps that never ran. */
   remaining: string[];
   /** The last few actions, for the parent to read before deciding. */

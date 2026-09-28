@@ -1,16 +1,29 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { EndpointError } from "./endpoint.js";
 import { parseDecisionBody } from "./jev.js";
 
-test("HTML or empty TypeSafe bodies are rejected", () => {
+test("HTML or empty TypeSafe bodies are rejected as endpoint faults", () => {
   assert.throws(
     () => parseDecisionBody("<!DOCTYPE html><html>Proceed with caution</html>", 1),
-    /HTML/,
+    (error: unknown) => error instanceof EndpointError && error.reason === "proxy_interstitial",
   );
-  assert.throws(() => parseDecisionBody("not json at all", 1), /non-JSON/);
-  assert.throws(() => parseDecisionBody(null, 1), /non-object/);
-  assert.throws(() => parseDecisionBody({ usage: {} }, 1), /missing answers/);
-  assert.throws(() => parseDecisionBody({ answers: {} }, 2), /empty answers/);
+  assert.throws(
+    () => parseDecisionBody("not json at all", 1),
+    (error: unknown) => error instanceof EndpointError && error.reason === "bad_response",
+  );
+  assert.throws(
+    () => parseDecisionBody(null, 1),
+    (error: unknown) => error instanceof EndpointError && error.reason === "bad_response",
+  );
+  assert.throws(
+    () => parseDecisionBody({ usage: {} }, 1),
+    (error: unknown) => error instanceof EndpointError && error.reason === "bad_response",
+  );
+  assert.throws(
+    () => parseDecisionBody({ answers: {} }, 2),
+    (error: unknown) => error instanceof EndpointError && error.reason === "bad_response",
+  );
 });
 
 test("a real decision body keeps its answers and usage", () => {

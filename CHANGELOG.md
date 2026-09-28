@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-09-28
+
+### Fixed
+
+- Jev provider and network faults surface as named endpoint reasons
+  (`rate_limit`, `auth`, `no_credits`, `not_found`, `provider_outage`,
+  `unreachable`, `proxy_interstitial`, `bad_response`) with the HTTP status and
+  a short provider message. They no longer look like a page reject. The series
+  stops immediately, `handoff.resumable` stays true when a tab exists, and a
+  proxy interstitial returns `blocked`.
+- `expect` runs when the final step completed, including under `noFail` after an
+  earlier rejection.
+- Docs align pick refuses with `no_match` and click/press refuses with
+  `no_control`.
+- A failed decide never increments `decisions` or records zero-token usage.
+
+### Changed
+
+- MCP instructions and the result guide are written for agents: tables for
+  status, reason, proof, handoff, and usage, and pointers instead of prose.
+- README documents the endpoint reasons and when `expect` runs.
+
 ## [0.1.4] - 2026-09-28
 
 ### Fixed

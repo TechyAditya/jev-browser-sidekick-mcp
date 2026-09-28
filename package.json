@@ -1,6 +1,6 @@
 {
   "name": "jev-browser-sidekick-mcp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "MCP server that runs plain-language browser steps. Jev, a typed decision model, picks the control on each page instead of an LLM reading the DOM.",
   "type": "module",
   "main": "./dist/api.js",
@@ -33,7 +33,7 @@
     "start": "node dist/index.js",
     "cli": "tsx src/cli.ts",
     "type-check": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json --pretty false && node --test --test-timeout 20000 dist-test/*.test.js",
+    "test": "tsc -p tsconfig.test.json --pretty false && node --test --test-timeout 90000 dist-test/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

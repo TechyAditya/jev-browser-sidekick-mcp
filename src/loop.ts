@@ -20,8 +20,9 @@ import {
 } from "./act.js";
 import { matchesActionLabel, parseIntent, type TaskIntent } from "./intent.js";
 import { createContextBudget, estimateTokens, type ContextBudget } from "./budget.js";
-import { createDeadline, withTimeout, type Deadline } from "./timeout.js";
+import { createDeadline, TimeoutError, withTimeout, type Deadline } from "./timeout.js";
 import { createTrace, noTrace, type Trace } from "./trace.js";
+import { classifyProviderError, isEndpointError, isEndpointReason } from "./endpoint.js";
 import { choiceOf, createJevClient, noulOf, type DecisionUsage, type JevClient } from "./jev.js";
 import { log } from "./log.js";
 import { clusterByTab, resolveGroups, type PlannedGroup } from "./plan.js";
@@ -62,6 +63,7 @@ import type {
   RunActionResult,
   RunStatus,
   RunStep,
+  StopReason,
   TaskResult,
   UsageTotals,
 } from "./types.js";
@@ -347,9 +349,11 @@ const runGroup = async (ctx: {
       }
 
       // Later steps stand on earlier ones, so a step that did not complete
-      // ends the series unless the caller asked to keep going.
+      // ends the series unless the caller asked to keep going. An endpoint
+      // fault always stops the series: spending more steps on a dead provider
+      // wastes work and can double-act on a shopping site after a bad resume.
       const failed = taskResults.find((row) => row.status !== "completed");
-      if (failed && !group.noFail) {
+      if (failed && (!group.noFail || isEndpointReason(failed.reason))) {
         taskResults.push({
           goal: task,
           status: "skipped",
@@ -389,20 +393,56 @@ const runGroup = async (ctx: {
           ...(input.debug ? { ms: Date.now() - taskStartedAt } : {}),
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        log.warn(`task failed: ${clip(message, 120)}`);
         await browser.settle(targetId, 1500).catch(() => undefined);
-        taskResults.push({
-          goal: task,
-          status: "error",
-          summary: clip(message, 160),
-          ...(input.debug ? { ms: Date.now() - taskStartedAt } : {}),
-        });
+        const endpoint =
+          isEndpointError(error)
+            ? error
+            : error instanceof TimeoutError
+              ? classifyProviderError(error)
+              : undefined;
+        if (endpoint) {
+          log.warn(`endpoint ${endpoint.reason}: ${clip(endpoint.summary, 160)}`);
+          taskResults.push({
+            goal: task,
+            status: endpoint.runStatus,
+            summary: endpoint.summary,
+            reason: endpoint.reason,
+            ...(input.debug ? { ms: Date.now() - taskStartedAt } : {}),
+          });
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          log.warn(`task failed: ${clip(message, 120)}`);
+          taskResults.push({
+            goal: task,
+            status: "error",
+            summary: clip(message, 160),
+            ...(input.debug ? { ms: Date.now() - taskStartedAt } : {}),
+          });
+        }
       }
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    taskResults.push({ goal: group.tasks[taskResults.length] ?? group.id, status: "error", summary: message });
+    const endpoint =
+      isEndpointError(error)
+        ? error
+        : error instanceof TimeoutError
+          ? classifyProviderError(error)
+          : undefined;
+    if (endpoint) {
+      taskResults.push({
+        goal: group.tasks[taskResults.length] ?? group.id,
+        status: endpoint.runStatus,
+        summary: endpoint.summary,
+        reason: endpoint.reason,
+      });
+    } else {
+      const message = error instanceof Error ? error.message : String(error);
+      taskResults.push({
+        goal: group.tasks[taskResults.length] ?? group.id,
+        status: "error",
+        summary: message,
+      });
+    }
   }
 
   // A series that stopped early still owes the parent a row per step, so the
@@ -416,20 +456,18 @@ const runGroup = async (ctx: {
     });
   }
 
-  // A completed step is Jev's claim. The expected text is the evidence.
+  // A completed final step is the page to check. Earlier rejects under noFail
+  // must not skip expect: that text is the only guard against a wrong ending.
   let verified: boolean | undefined;
   let proof: string | undefined;
   let status = rollup(taskResults);
-  // Proof is only worth reading when every step ran. Checking a series that
-  // stopped would report the text as missing when it was never looked for.
   let proofChecked = false;
+  const finalTask = taskResults[group.tasks.length - 1];
   if (group.expect) {
-    // A series that asked for proof and did not get it is not verified, whether
-    // the text was missing or the run never reached the page. Leaving this unset
-    // made the two look like a series that never asked, and the caller's rollup
-    // then read "no answer" as "passed".
+    // Leaving verified unset made a series that never asked look the same as
+    // one that passed, so a parallel rollup could report verified true wrongly.
     verified = false;
-    if (targetId && status === "completed") {
+    if (targetId && finalTask?.status === "completed") {
       proofChecked = true;
       // A cart drawn by the page's own scripts arrives after the navigation, so
       // a single look can miss proof that is about to appear.
@@ -447,7 +485,7 @@ const runGroup = async (ctx: {
           (snap ? proofContext(snap.text, group.expect) : undefined);
         verified = proof !== undefined;
       }
-      if (!verified) status = "unverified";
+      if (!verified && status === "completed") status = "unverified";
     }
   }
 
@@ -521,7 +559,9 @@ const buildHandoff = (ctx: {
   const stopped = index >= 0 ? ctx.taskResults[index]! : undefined;
   const remaining = index >= 0 ? ctx.group.tasks.slice(index + 1) : [];
   return {
-    resumable: Boolean(ctx.targetId) && ctx.status !== "error",
+    // An endpoint fault still leaves the tab usable. Marking it non-resumable
+    // forced callers to redo completed cart work after a proxy blip.
+    resumable: Boolean(ctx.targetId),
     targetId: ctx.targetId,
     groupId: ctx.groupId,
     url: ctx.url || undefined,
@@ -564,7 +604,7 @@ const runTask = async (ctx: {
 }): Promise<{
   status: RunStatus;
   summary: string;
-  reason?: BlockReason;
+  reason?: StopReason;
   /** What a read step found. */
   text?: string;
   url: string;
@@ -1312,8 +1352,11 @@ const pickControl = async (ctx: {
     const choice = choiceOf(decision.answers, "control")?.choice;
     if (!choice || choice === NO_CONTROL) return undefined;
     return ctx.candidates.find((_row, index) => controlOption(index) === choice);
-  } catch {
-    // A failed judgment is not a licence to press the first thing found.
+  } catch (error) {
+    // A provider or timeout fault must surface. Anything else is a soft miss.
+    if (isEndpointError(error) || error instanceof TimeoutError) {
+      throw isEndpointError(error) ? error : classifyProviderError(error);
+    }
     return undefined;
   }
 };
@@ -1347,7 +1390,10 @@ const askWhyBlocked = async (ctx: {
       blocked: noulOf(decision.answers, "blocked"),
       reason: (choiceOf(decision.answers, "blocker")?.choice as BlockReason) ?? "unknown",
     };
-  } catch {
+  } catch (error) {
+    if (isEndpointError(error) || error instanceof TimeoutError) {
+      throw isEndpointError(error) ? error : classifyProviderError(error);
+    }
     return { blocked: 0, reason: "unknown" };
   }
 };

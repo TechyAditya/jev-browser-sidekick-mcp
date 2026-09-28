@@ -15,16 +15,14 @@ the judgment is about a live page.
 
 ## When raw beats a browser step
 
-Reach for it in these cases:
-
-- Two or more options read as equally good and you want a calibrated pick.
+- Two or more options read equally good and you want a calibrated pick.
 - A tie-break you would otherwise settle at random.
 - A gate before a costly or risky action.
 - A rank over candidates you already collected.
 - A screen: does this text meet the bar, yes or no.
 
-Jev is the wrong tool for anything needing an explanation, a plan, or a written
-answer. Write those yourself.
+Wrong tool for anything needing an explanation, a plan, or a written answer.
+Write those yourself.
 
 ## The three question types
 
@@ -53,7 +51,7 @@ Every question needs an id you pick, a \`type\`, and \`instructions\`.
   array, lowest level first. A \`noul\` keys it by \`true\` and \`false\`, and
   those two spellings are the only ones it accepts.
 
-Rules for \`criteria\`:
+\`criteria\` rules:
 
 - Describe each option. A bare label makes Jev guess what it means.
 - Keep options mutually exclusive. Overlapping options split one probability
@@ -63,12 +61,12 @@ Rules for \`criteria\`:
 
 ## Ask everything in one call
 
-Questions in one call share the state and are answered in parallel. Extra
-questions cost their own tokens and almost no extra time, so include the ones
-that only matter for some inputs and ignore the answers you do not need.
+Questions in one call share the state and answer in parallel. Extra questions
+cost their own tokens and almost no extra time, so include the ones that only
+matter for some inputs and ignore the answers you do not need.
 
-Questions never see each other's answers. When a later question genuinely
-depends on an earlier answer, make a second call.
+Questions never see each other's answers. When a later question depends on an
+earlier answer, make a second call.
 
 ## Write the state
 
@@ -76,7 +74,7 @@ depends on an earlier answer, make a second call.
 a named field. Point a question at one part by naming its path in backticks,
 for example \`Does \\\`ticket.messages[0].text\\\` ask for a refund?\`.
 
-Keep the state to what the question needs. Size ceilings:
+Keep the state to what the question needs. Ceilings:
 
 - 64,000 tokens for the whole request.
 - 32,000 tokens for the state plus the longest single question.
@@ -85,7 +83,7 @@ Keep the state to what the question needs. Size ceilings:
 
 \`probabilities\` is the spread over your options. \`confidence\` summarizes how
 peaked that spread is. They answer different things: the probability says
-which, and the confidence says whether to act alone.
+which, the confidence says whether to act alone.
 
 Route on confidence. Act when it is high. Ask a person, or gather more
 evidence, when it is low. Pick the threshold from your own tolerance for a
@@ -147,8 +145,8 @@ Response:
 }
 \`\`\`
 
-Both answers came from one call. The second one only mattered because the
-first picked \`schema\`, and asking it up front cost 31 output tokens.
+Both answers came from one call. The second only mattered because the first
+picked \`schema\`, and asking it up front cost 31 output tokens.
 
 ## Limits
 

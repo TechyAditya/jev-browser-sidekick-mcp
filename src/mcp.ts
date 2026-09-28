@@ -8,48 +8,39 @@ import { log } from "./log.js";
 import { RAW_GUIDE, RAW_GUIDE_URI } from "./guide.js";
 
 const taskGroupSchema = z.object({
-  id: z.string().optional().describe("Label for this series, echoed back in the result."),
+  id: z.string().optional().describe("Label for this series. Echoed back in the result."),
   targetId: z.string().optional().describe("Tab this series runs on."),
   groupId: z.string().optional().describe("Tab group to open a new tab in."),
   startUrl: z.string().optional().describe("Address to open before the first step."),
-  goal: z.string().optional().describe("A single step, when tasks is omitted."),
-  tasks: z.array(z.string().min(1)).max(24).optional().describe("The steps, in order."),
+  goal: z.string().optional().describe("Single step. Use when tasks is omitted."),
+  tasks: z.array(z.string().min(1)).max(24).optional().describe("Steps in order."),
   noFail: z
     .boolean()
     .optional()
-    .describe("Run the rest of this series even after a step that did not complete."),
-  expect: z
-    .string()
-    .optional()
-    .describe("Text that proves this series worked. Read off the final page."),
+    .describe("Run the rest of this series after a step does not complete. Endpoint faults stop it anyway."),
+  expect: z.string().optional().describe("Text that proves this series worked. Checked on the final page."),
 });
 
 const runActionSchema = {
-  goal: z.string().optional().describe("A single step. Use tasks for a series."),
+  goal: z.string().optional().describe("Single step. Use tasks for a series."),
   tasks: z
     .array(z.string().min(1))
     .max(24)
     .optional()
-    .describe("Steps in order on one tab, one primitive action each."),
+    .describe("Steps in order on one tab, one action each."),
   groups: z
     .array(taskGroupSchema)
     .max(4)
     .optional()
     .describe(
-      "Independent errands, run at the same time, one tab each. Use this whenever the work splits across two sites, accounts, or searches instead of calling the tool twice.",
+      "Independent errands, run at the same time, one tab each. Use whenever the work splits across two sites, accounts, or searches, instead of two calls.",
     ),
   noFail: z
     .boolean()
     .optional()
-    .describe("Run the rest of the series even after a step that did not complete."),
-  expect: z
-    .string()
-    .optional()
-    .describe("Text that proves the run worked. Read off the final page."),
-  targetId: z
-    .string()
-    .optional()
-    .describe("Tab to work in. Omit to open one, which is returned in targetIds."),
+    .describe("Run the rest of the series after a step does not complete. Endpoint faults stop it anyway."),
+  expect: z.string().optional().describe("Text that proves the run worked. Checked on the final page."),
+  targetId: z.string().optional().describe("Tab to work in. Omit to open one, returned in targetIds."),
   groupId: z.string().optional().describe("Tab group to open a new tab in."),
   startUrl: z.string().optional().describe("Address to open before the first step."),
   values: z
@@ -71,16 +62,13 @@ const runActionSchema = {
     .max(240_000)
     .optional()
     .describe(
-      "Ceiling for the whole call. Default 90000. On expiry the call returns normally with the steps that finished and a handoff naming the rest. Keep it under your own client's transport timeout, because a dropped call still leaves the browser work done.",
+      "Ceiling for the whole call. Default 90000. On expiry the call returns with the steps that finished plus a handoff naming the rest. Keep it under your client transport timeout: a dropped call still leaves the browser work done.",
     ),
   debug: z
     .boolean()
     .optional()
     .describe("Record every browser call and Jev answer to the JSONL file named in tracePath."),
-  returnSnapshot: z
-    .boolean()
-    .optional()
-    .describe("Include the final page's accessibility tree."),
+  returnSnapshot: z.boolean().optional().describe("Include the final page accessibility tree."),
 };
 
 /**
@@ -91,44 +79,60 @@ const RESULT_GUIDE_URI = "jev://reading-a-result";
 
 const RESULT_GUIDE = `# Reading a run_action result
 
-## Per step
+## status
 
-Every task carries its own \`status\` and \`summary\`, and \`reason\` when a page
-turned it down.
-
-| status | What it means | What to do |
+| status | Meaning | Next |
 | --- | --- | --- |
-| \`completed\` | The step did what it said | Nothing |
-| \`partial\` | It did some of the work and stopped | Run the step again |
-| \`rejected\` | The page answered no | Read \`reason\`. Treat it as information |
-| \`blocked\` | The page wants something only you can give | Read \`handoff\` |
-| \`unverified\` | Every step ran, \`expect\` was not on the page | Check the page yourself |
-| \`max_steps\` | The budget or the clock ran out | Resume from \`handoff\` |
-| \`skipped\` | An earlier step stopped this one | Set \`noFail\` if the steps stand alone |
+| \`completed\` | Step did what it said | Continue |
+| \`partial\` | Some work done, more left | Rerun same step |
+| \`rejected\` | Page said no | Read \`reason\`. Not a crash |
+| \`blocked\` | Sign-in, password, captcha, or proxy interstitial | Read \`handoff\`. Operator clears |
+| \`error\` | Endpoint fault | Read \`reason\` + \`handoff\`. Resume. Not a page reject |
+| \`unverified\` | Final step done, \`expect\` missing | Check page |
+| \`max_steps\` | Budget or clock out | Resume from \`handoff\` |
+| \`skipped\` | Earlier step stopped this one | \`noFail\` only for independent page steps |
 
-\`reason\` values: \`sign_in\`, \`credentials\`, \`captcha\` hand back to you.
-\`unavailable\`, \`wrong_page\`, \`no_control\`, \`no_match\`, \`other_route\`,
-\`not_ready\` are the page's own answer. \`no_control\` means nothing on that page
-carried the label the step named, and the step refused to press anything else.
-\`no_match\` means a pick step found no entry that names the subject, or Jev
-chose the standing \`none\` option among the candidates.
+Group \`status\` = worst case. Read \`counts\` for tally.
+
+## page reason
+
+| reason | Meaning |
+| --- | --- |
+| \`no_control\` | Click/press: no control for label, or standing \`none\` won |
+| \`no_match\` | Pick (\`open the … result\`): no matching entry, or \`none\` won |
+| \`unavailable\` | Out of stock / not delivered here |
+| \`other_route\` | Different route on page |
+| \`wrong_page\` | Page not about wanted thing |
+| \`not_ready\` | Page still loading |
+| \`sign_in\`, \`credentials\`, \`captcha\` | Status \`blocked\`, not \`rejected\` |
+
+## endpoint reason
+
+Not a page answer. Summary has HTTP status + short provider message. Series
+stops even under \`noFail\`. \`handoff.resumable\` true when tab exists.
+
+| reason | Cause |
+| --- | --- |
+| \`rate_limit\` | HTTP 429 |
+| \`auth\` | HTTP 401 or 403 |
+| \`no_credits\` | HTTP 402 or credits/quota body |
+| \`not_found\` | HTTP 404 model or endpoint |
+| \`provider_outage\` | HTTP 5xx |
+| \`unreachable\` | Timeout, DNS, connection refused |
+| \`proxy_interstitial\` | HTTP 200 \`text/html\`. Status \`blocked\` |
+| \`bad_response\` | Non-JSON or empty answers |
 
 ## proof
 
-A group carrying \`expect\` reports \`verified\` and \`proof\`. \`proof\` is the
-expected text with about 70 characters either side, so you can tell a cart
-line from a recommendation rail:
+\`expect\` set and final step \`completed\`: result carries \`verified\` plus
+\`proof\`, the match with about 70 chars either side. Same under \`noFail\` after
+an earlier reject. Final step never ran: \`proof: not checked\`.
 
-\`\`\`json
-{ "verified": true, "proof": "…Subtotal (3 items): ₹2,169.00 Proceed to Buy…" }
-\`\`\`
-
-A \`read\` step is the stronger check. It puts the page's own words in the
-task's \`text\` field, with no judgment in between.
+\`read\` puts page words in task \`text\`.
 
 ## handoff
 
-Present whenever a series stopped early.
+Present when series stops early.
 
 \`\`\`json
 {
@@ -143,30 +147,21 @@ Present whenever a series stopped early.
 }
 \`\`\`
 
-Call run_action again with that \`targetId\` and the \`remaining\` steps. The tab
-is the one your own browser tools see, so you can finish the stopped step
-there first.
+Resume: \`run_action\` with that \`targetId\` + \`remaining\`. Clear credentials or
+captcha in shared tab first when \`blocked\`. Replay completed steps = do them
+twice.
 
-## usage and timing
+## usage
 
-Both appear only when \`debug\` is set, alongside \`tracePath\`. \`elapsedMs\` is the
-whole call, and every group and task carries its own \`ms\`.
-
-Token counts are summed from what each API response reported. Nothing is
-estimated.
+Only with \`debug\`. From API bodies. Failed decide does not bump \`decisions\`.
 
 | Field | Source |
 | --- | --- |
-| \`inputTokens\`, \`outputTokens\` | \`usage.input_tokens\` and \`usage.output_tokens\` on every Jev response |
-| \`totalTokens\` | The two above, added |
-| \`decisions\` | Jev calls made. Zero is normal: a search, a destination, and a control named exactly what the step said all resolve without a judgment |
-| \`textCalls\` | Calls to the text model that fills a field Jev cannot write |
-| \`costUsd\` | Only when a provider returns a price. Absent on a direct TypeSafe key |
-
-## debug
-
-Set \`debug\` and every browser call and Jev decision is written to the JSONL
-file named in \`tracePath\`.
+| \`inputTokens\`, \`outputTokens\` | Provider \`usage\` on each successful decide |
+| \`totalTokens\` | Sum |
+| \`decisions\` | Successful Jev calls. Zero OK when harness search or exact label needs no judgment |
+| \`textCalls\` | Text-model fills |
+| \`costUsd\` | Only when provider returns price |
 `;
 
 const questionSchema = z
@@ -174,12 +169,12 @@ const questionSchema = z
     type: z.enum(["choice", "score", "noul"]).describe("choice picks one option. score rates on ordered levels. noul answers yes or no."),
     instructions: z
       .union([z.string(), z.record(z.unknown()), z.array(z.unknown())])
-      .describe("The whole question, written out. The question id is not sent to the model."),
+      .describe("The whole question, written out. The id is not sent to the model."),
     criteria: z
       .union([z.record(z.string().nullable()), z.array(z.string())])
       .optional()
       .describe(
-        "Options for choice (max 255), keyed by your own names. Ordered levels for score (max 10), as an array, lowest first. For noul, the two keys true and false, each describing what that answer means.",
+        "Options for choice (max 255), keyed by your own names. Ordered levels for score (max 10), as an array, lowest first. For noul, the keys true and false, each describing what that answer means.",
       ),
   })
   .describe("One typed question.");
@@ -194,90 +189,52 @@ const rawSchema = {
   model: z.string().optional().describe("Pin a Jev version. Default is the configured model."),
 };
 
-const INSTRUCTIONS = `Jev is a decision model. It picks among labelled options and returns typed
-answers with probabilities. It writes no text and reads no images, so you
-write the plan and each step hands Jev one choice.
+const INSTRUCTIONS = `Jev picks labelled options, returns typed answers with probabilities.
+Writes no text. Reads no images. You write plan. Each step = one choice on
+live page.
 
-run_action drives a real browser. use_jev_raw takes one typed decision with
-no browser in it. Use it whenever a call is close enough that you would
-otherwise guess, and you want the odds instead.
+Tools:
+  run_action   browser steps; Jev chooses per page
+  use_jev_raw  typed decision, no browser; use when about to guess
 
-The step shapes, one page each:
-  search <words>              put the words in the page's own search box
-  open the <words> result     choose that entry out of a list
-  open the <name> page        reach a place, such as the cart page
-  click <label>               press the control carrying that label
-  keep clicking <label>       press it until the page stops offering it
-  clear <thing>               the same, for a delete control it finds itself
-  read <thing>                hand the page's own words back to you
-  read the page title and url answer "where am I" without the whole page
+Step shapes (one page each; words from screen):
+  search <words>              type into page search box
+  open the <words> result     pick list entry; refuse = no_match
+  open the <name> page        reach place (cart, account)
+  click <label>               press control; refuse = no_control
+  keep clicking <label>       press until page stops offering it
+  clear <thing>               delete control harness finds
+  read <thing>                return page words
+  read the page title and url where am I
 
-One step, one page. Use the words on the screen. Jev matches labels literally.
-
-A click step stays on the page it was handed. When no control there carries
-the label, or Jev picks the standing none option among the candidates, it
-comes back rejected with reason no_control rather than pressing something
-else. A pick step that finds no matching entry, or whose none option wins,
-comes back rejected with reason no_match. End a series with a read step when
-you want to see the outcome for yourself.
-
-Adding one item to a cart is three steps, one per page:
+One step, one page. Compound goal stays on first page, presses wrong control.
+Cart add = three steps:
   search colgate toothpaste
   open the best matching colgate toothpaste result
   click add to cart
-A single "add colgate toothpaste to cart" runs, but it never leaves the
-results page, so it presses whatever there carries those words.
 
-A step whose outcome already holds comes back rejected with reason
-no_control, because the page no longer carries the control: once an item is
-in the cart the button reads "Go to cart". Read the cart with a read step
-when you need to know which it was.
+Independent errands go in groups: parallel, one tab each. Groups sharing a
+targetId run serial. Each decision sees motive plus steps_done for its series.
 
-Independent errands belong in groups, and run at the same time, one tab each.
-Two sites, two accounts, or two searches are one call with two groups:
-  {"groups": [
-    {"id": "amazon",   "startUrl": "https://amazon.in",   "tasks": ["...", "..."]},
-    {"id": "flipkart", "startUrl": "https://flipkart.com", "tasks": ["...", "..."]}
-  ]}
-Steps inside a group run in order on its tab against the live page. Each
-decision also sees the series motive and a short line for each finished task
-in that series, so Jev can refuse a redundant step. Parallel groups share
-nothing. Groups sharing a targetId run one after another, because they share
-the tab.
+Read every step status before next move:
+  rejected + no_control|no_match|…     page answered; not crash
+  blocked + sign_in|credentials|captcha|proxy_interstitial
+  error + rate_limit|auth|no_credits|not_found|provider_outage|
+         unreachable|bad_response      endpoint fault; not page reject
+On endpoint or blocked: stop. Read handoff. Resume with targetId + remaining.
+Replay completed steps = do them twice.
+Tables for status, reason, handoff, proof, usage: ${RESULT_GUIDE_URI}
 
-Read every step's own status:
-  completed   the step did what it said
-  partial     it did some of the work and stopped with more to do
-  rejected    the page answered no, such as out of stock or no matching
-              control. Read reason. Missing controls are rejected, not blocked.
-  blocked     the page wants something only you can give (sign-in, password,
-              captcha). Read handoff.
-  unverified  every step ran, and expect was missing from the final page
-  skipped     an earlier step stopped this one. noFail runs them anyway.
+expect = text only finished page produces ("Subtotal (3 items)", not product
+name). Checked when final step completed, including after noFail rejects.
+End with read when you need page words yourself.
 
-Set expect to the text that proves the run worked, and pick text only the
-finished state produces: "Subtotal (3 items)" rather than a product name,
-which also appears in recommendation rails. The result quotes the words
-around the match in proof, so you can see which it matched.
+Shared Chrome with agentic-playwright-mcp: pass targetId both ways.
+Keep timeoutMs under client transport timeout. Resume beats one long call.
 
-Each group also reports counts, such as {"completed": 8, "rejected": 1}. The
-status is worst-case across the series; the counts are what happened.
-
-A sign-in wall, a password, a one-time code, or a captcha stops the step as
-blocked. The handoff names the tab, the URL, the step that stopped, and the
-steps left. Keep calls short for the same reason: a call returns on its own
-clock with a handoff for the rest, while a call your client drops leaves the
-browser work done and invisible, so repeating those steps does them twice.
-
-This server drives the Chrome that agentic-playwright-mcp runs, so the tabs,
-the profile, and the cookies are the ones your own browser tools see. Pass
-targetId both ways, and finish a blocked step there yourself.
-
-Two traps worth knowing on shopping sites. A site can run more than one
-storefront in one tab, such as Amazon Fresh beside the main store, and a
-search box keeps you in whichever one the tab is already in; pass a startUrl
-that names the store you want. A site can also keep more than one cart, so
-clearing one leaves the other, and a cart count can span both.`;
+Traps: one tab, two storefronts (search stays in current; set startUrl).
+One site, two carts (clear the one that owns the rows).
+`;
 
 export interface ServerOptions {
   /** Trace every run, whatever the caller passes. Set by --debug. */
@@ -286,7 +243,7 @@ export interface ServerOptions {
 
 export const createJevServer = (options: ServerOptions = {}): McpServer => {
   const server = new McpServer(
-    { name: "jev", version: "0.1.0" },
+    { name: "jev", version: "0.1.5" },
     { instructions: INSTRUCTIONS },
   );
 
@@ -296,7 +253,7 @@ export const createJevServer = (options: ServerOptions = {}): McpServer => {
     {
       title: "Writing raw Jev decisions",
       description:
-        "How to write state, choice, score, and noul questions for use_jev_raw: criteria rules, confidence, size limits, and worked examples. Read before the first use_jev_raw call.",
+        "Question shapes for use_jev_raw: state, choice, score, noul, criteria rules, confidence, size limits, worked example. Read before the first use_jev_raw call.",
       mimeType: "text/markdown",
     },
     async (uri) => ({
@@ -310,7 +267,7 @@ export const createJevServer = (options: ServerOptions = {}): McpServer => {
     {
       title: "Reading a run_action result",
       description:
-        "Every status and reason a step can carry, the handoff shape and how to resume from it, and what each usage field counts. Read when a run comes back rejected, blocked, unverified, or max_steps.",
+        "Result tables: status, page reason, endpoint reason, handoff and resume, expect and proof, usage fields. Read on rejected, blocked, error, unverified, max_steps, or any unfamiliar reason.",
       mimeType: "text/markdown",
     },
     async (uri) => ({
@@ -320,7 +277,7 @@ export const createJevServer = (options: ServerOptions = {}): McpServer => {
 
   server.tool(
     "run_action",
-    "Drive a browser through steps you write, with Jev choosing on each page. Covers several independent errands in one call through groups, one tab each, so two sites never need two calls. Returns a status per step, a handoff when one stops, and the tokens the API reported. Read this server's instructions for the step shapes.",
+    "Drive a browser through steps you write. Jev chooses on each page. Use for search, open, click, and read on live pages, and for several independent errands in one call through groups, one tab each, so two sites never need two calls. Returns a status per step, a handoff when one stops, and the tokens the API reported. Step shapes and status tables are in this server's instructions.",
     runActionSchema,
     async (args) => {
       try {
@@ -357,15 +314,15 @@ export const createJevServer = (options: ServerOptions = {}): McpServer => {
 
   server.tool(
     "use_jev_raw",
-    `Ask Jev one typed question, or several, with no browser involved.
+    `Ask Jev one typed question, or several. No browser.
 
-Use it whenever a decision has more than one defensible answer and you are about to pick on instinct. Jev gives a probability for every option and a confidence, so a close call reads as close, and a clear one reads as clear. Anything you would otherwise settle by coin flip and call judgment belongs here.
+Use whenever a decision has more than one defensible answer and you are about to pick on instinct. Jev returns a probability for every option plus a confidence, so a close call reads close and a clear one reads clear. Anything you would settle by coin flip and call judgment belongs here.
 
-Decisions worth handing over: which of these fixes to do first, which name or design to ship when each has a real trade-off, whether this text meets a bar you can write down, which of two error messages a stranger understands faster, whether a step is risky enough to stop and ask the user, how to rank a list of candidates, which of two readings of an ambiguous request the user meant.
+Worth handing over: which fix to do first, which name or design to ship when each has a real trade-off, whether this text meets a bar you can write down, which of two error messages a stranger reads faster, whether a step is risky enough to stop and ask the user, how to rank candidates, which reading of an ambiguous request the user meant.
 
-Ask every question you have in one call. They share the state, they answer in parallel, and each extra question costs its own tokens and almost no extra time. Three questions over a page of state run about a tenth of a cent, so the cost is rarely the reason to skip it.
+Ask every question in one call. They share the state, they answer in parallel, and each extra question costs its own tokens and almost no extra time. Three questions over a page of state run about a tenth of a cent.
 
-The answer gives the chosen option, the probability of every option, a confidence, and the tokens the API counted. Read the ${RAW_GUIDE_URI} resource before the first call for the question shapes and the criteria rules.`,
+The answer gives the chosen option, the probability of every option, a confidence, and the tokens the API counted. Question shapes and criteria rules: ${RAW_GUIDE_URI}`,
     rawSchema,
     async (args) => {
       try {

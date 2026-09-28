@@ -1,5 +1,18 @@
-import { TypeSafeClient, type EntryType, type Questions } from "@typesafe-ai/sdk";
+import {
+  APIConnectionError,
+  APIError,
+  APITimeoutError,
+  AuthenticationError,
+  InternalServerError,
+  NotFoundError,
+  PermissionDeniedError,
+  RateLimitError,
+  TypeSafeClient,
+  type EntryType,
+  type Questions,
+} from "@typesafe-ai/sdk";
 import { OpenRouter } from "@openrouter/sdk";
+import { classifyProviderError, EndpointError, isEndpointError } from "./endpoint.js";
 import type { JevConfig } from "./types.js";
 import { noTrace, type Trace } from "./trace.js";
 
@@ -111,6 +124,9 @@ const typesafeClient = (config: JevConfig): TypeSafeClient =>
     baseURL: config.baseUrl,
     defaultModel: config.model,
     timeout: 20_000,
+    // Fail loud on the first provider answer. The series stops and stays
+    // resumable; silent multi-minute retries hid proxy and auth faults.
+    retry: { maxRetries: 0 },
     logLevel: "error",
     logger: stderrLogger,
   });
@@ -127,16 +143,21 @@ export const parseDecisionBody = (
   if (typeof body === "string") {
     const trimmed = body.trim();
     if (!trimmed || trimmed.startsWith("<")) {
-      throw new Error("TypeSafe returned HTML instead of a decision");
+      throw new EndpointError("proxy_interstitial", {
+        httpStatus: 200,
+        providerMessage: trimmed.slice(0, 240) || "HTML body with no JSON",
+      });
     }
     try {
       body = JSON.parse(trimmed);
     } catch {
-      throw new Error("TypeSafe returned a non-JSON body");
+      throw new EndpointError("bad_response", {
+        providerMessage: trimmed.slice(0, 240) || "non-JSON body",
+      });
     }
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new Error("TypeSafe returned a non-object decision");
+    throw new EndpointError("bad_response", { providerMessage: "non-object decision body" });
   }
   const raw = body as {
     answers?: Record<string, unknown>;
@@ -144,16 +165,65 @@ export const parseDecisionBody = (
     model?: string;
   };
   if (!raw.answers || typeof raw.answers !== "object" || Array.isArray(raw.answers)) {
-    throw new Error("TypeSafe response missing answers");
+    throw new EndpointError("bad_response", { providerMessage: "response missing answers" });
   }
   const answers: Record<string, Answer> = {};
   for (const [id, value] of Object.entries(raw.answers)) {
     answers[id] = normalizeAnswer(value);
   }
   if (questionCount > 0 && Object.keys(answers).length === 0) {
-    throw new Error("TypeSafe returned empty answers");
+    throw new EndpointError("bad_response", { providerMessage: "empty answers object" });
   }
   return { answers, usage: usageFrom(raw.usage), model: raw.model };
+};
+
+const mapSdkError = (error: unknown): EndpointError => {
+  if (isEndpointError(error)) return error;
+  if (error instanceof RateLimitError) {
+    return new EndpointError("rate_limit", {
+      httpStatus: error.status,
+      providerMessage: error.message,
+      cause: error,
+    });
+  }
+  if (error instanceof AuthenticationError || error instanceof PermissionDeniedError) {
+    return new EndpointError("auth", {
+      httpStatus: error.status,
+      providerMessage: error.message,
+      cause: error,
+    });
+  }
+  if (error instanceof NotFoundError) {
+    return new EndpointError("not_found", {
+      httpStatus: error.status,
+      providerMessage: error.message,
+      cause: error,
+    });
+  }
+  if (error instanceof InternalServerError) {
+    return new EndpointError("provider_outage", {
+      httpStatus: error.status,
+      providerMessage: error.message,
+      cause: error,
+    });
+  }
+  if (error instanceof APITimeoutError || error instanceof APIConnectionError) {
+    return new EndpointError("unreachable", {
+      providerMessage: error.message,
+      cause: error,
+    });
+  }
+  if (error instanceof APIError) {
+    if (error.status === 402) {
+      return new EndpointError("no_credits", {
+        httpStatus: 402,
+        providerMessage: error.message,
+        cause: error,
+      });
+    }
+    return classifyProviderError(error);
+  }
+  return classifyProviderError(error);
 };
 
 const decideWithTypeSafe = async (
@@ -165,18 +235,32 @@ const decideWithTypeSafe = async (
 ): Promise<DecisionResult> => {
   const payload = { model, state, questions };
   const started = Date.now();
-  const response = await client.systemOne(payload);
-  const parsed = parseDecisionBody(response, Object.keys(questions).length);
-  trace.record({
-    kind: "request",
-    name: "typesafe.systemOne",
-    ms: Date.now() - started,
-    ok: true,
-    endpoint: "/v1/systemone",
-    payload,
-    response,
-  });
-  return parsed;
+  try {
+    const response = await client.systemOne(payload);
+    const parsed = parseDecisionBody(response, Object.keys(questions).length);
+    trace.record({
+      kind: "request",
+      name: "typesafe.systemOne",
+      ms: Date.now() - started,
+      ok: true,
+      endpoint: "/v1/systemone",
+      payload,
+      response,
+    });
+    return parsed;
+  } catch (error) {
+    const mapped = mapSdkError(error);
+    trace.record({
+      kind: "request",
+      name: "typesafe.systemOne",
+      ms: Date.now() - started,
+      ok: false,
+      endpoint: "/v1/systemone",
+      payload,
+      error: mapped.summary,
+    });
+    throw mapped;
+  }
 };
 
 const decideWithOpenRouterSdk = async (
@@ -198,21 +282,38 @@ const decideWithOpenRouterSdk = async (
     questions: questions as never,
   };
   const started = Date.now();
-  const response = await client.alpha.decisions.create({ decisionsRequest });
-  const parsed = parseDecisionBody(response, Object.keys(questions).length);
-  trace.record({
-    kind: "request",
-    name: "openrouter.decisions.create",
-    ms: Date.now() - started,
-    ok: true,
-    endpoint: "/api/alpha/decisions",
-    payload: decisionsRequest,
-    response,
-  });
-  return parsed;
+  try {
+    const response = await client.alpha.decisions.create({ decisionsRequest });
+    const parsed = parseDecisionBody(response, Object.keys(questions).length);
+    trace.record({
+      kind: "request",
+      name: "openrouter.decisions.create",
+      ms: Date.now() - started,
+      ok: true,
+      endpoint: "/api/alpha/decisions",
+      payload: decisionsRequest,
+      response,
+    });
+    return parsed;
+  } catch (error) {
+    const mapped = mapSdkError(error);
+    trace.record({
+      kind: "request",
+      name: "openrouter.decisions.create",
+      ms: Date.now() - started,
+      ok: false,
+      endpoint: "/api/alpha/decisions",
+      payload: decisionsRequest,
+      error: mapped.summary,
+    });
+    throw mapped;
+  }
 };
 
-/** TypeSafeClient.systemOne. On openrouter failure, OpenRouter.alpha.decisions.create. */
+/**
+ * TypeSafeClient.systemOne first. Named endpoint faults are not retried on
+ * OpenRouter, because the same proxy or key usually fails both paths.
+ */
 export const createJevClient = (config: JevConfig, trace: Trace = noTrace): JevClient => {
   const sdk = typesafeClient(config);
   return {
@@ -220,17 +321,15 @@ export const createJevClient = (config: JevConfig, trace: Trace = noTrace): JevC
       try {
         return await decideWithTypeSafe(sdk, state, questions, model, trace);
       } catch (error) {
-        trace.record({
-          kind: "request",
-          name: "typesafe.systemOne",
-          ok: false,
-          payload: { model, state, questions },
-          error: error instanceof Error ? error.message : String(error),
-        });
+        if (isEndpointError(error)) throw error;
         if (config.provider === "openrouter" && config.apiKey) {
-          return decideWithOpenRouterSdk(config.apiKey, state, questions, model, trace);
+          try {
+            return await decideWithOpenRouterSdk(config.apiKey, state, questions, model, trace);
+          } catch (fallback) {
+            throw mapSdkError(fallback);
+          }
         }
-        throw error;
+        throw mapSdkError(error);
       }
     },
   };
