@@ -103,7 +103,8 @@ Jev picks among labelled options and returns typed answers. It does not read pla
 | `open the <words> result`     | Chooses that entry out of a list               |
 | `open the <name> page`        | Reaches a place, such as the cart page         |
 | `click <label>`               | Presses the control carrying that label        |
-| `keep clicking <label>`       | Presses it until the page stops offering it    |
+| `repeat <step> until <words>` | Runs that step once a round until the page shows those words |
+| `keep clicking <label>`       | The same, with the condition read off the label |
 | `clear <thing>`               | The same, for a delete control it finds itself |
 | `read <thing>`                | Hands the page's own words back to you         |
 | `read the page title and url` | Answers "where am I" without the whole page    |
@@ -120,17 +121,39 @@ A single `add colgate toothpaste to cart` still runs, but it never leaves the re
 
 Each step runs against the live page. The decision also sees the series `motive` and a short `steps_done` line for each finished task, so Jev can refuse a step that earlier work already covered. Groups running in parallel share nothing, so each one sees only its own motive and its own finished steps.
 
-### Repeat a press until the page stops offering it
+### Repeat steps until the page says to stop
 
-`clear cart` is one use of a general rule. The server presses the same control until the page stops offering it. A step that names its own control keeps it, so `keep clicking Load more` works anywhere. A step that names a container instead, such as `clear cart`, falls back to whatever the page uses for delete or remove.
+A loop runs its body once a round, then Jev reads the live page and answers one question: does the condition hold yet? Clearing a cart is one use of it. Any page that hands back one item at a time needs the same shape.
 
-A repeat that gives up with controls still on the page returns `partial`, never `completed`. A repeat that presses nothing returns `rejected` with reason `no_control`, the same answer a single `click` gives, so an untouched cart never reads as a cleared one.
+```json
+["repeat click remove until the cart is empty"]
+```
+
+The condition ends the loop, not a control disappearing. A site that redraws its list between rounds offers no controls for a moment, and reading that as "finished" reports an untouched cart as cleared. Write the condition as something the page shows, such as `the cart is empty`, rather than `done`.
+
+A step that names its own control derives its condition, so `keep clicking Load more` and `clear cart` still work as written. Between rounds the server waits for the page's own scripts rather than a fixed pause, because a row that a site deletes over the network lands whenever its request comes back.
+
+For a body of more than one step, pass a loop object in `tasks`.
+
+```json
+{
+	"tasks": [
+		"open the cart page",
+		{ "loop": { "tasks": ["click remove", "click confirm"], "until": "the cart is empty", "maxRounds": 20 } },
+		"read the cart"
+	]
+}
+```
+
+No loop runs forever. Five things end one: the condition, the round ceiling (`maxRounds`, 12 by default and never above 50), the call's own deadline, the step budget, and two rounds that change nothing. The step reports `completed` when the page showed the condition, `partial` when a ceiling stopped it with work left, and `rejected` with `no_control` when the body pressed nothing at all. Every loop step carries the `rounds` it ran.
 
 ### When the outcome already holds
 
-A step that names a control the page no longer carries comes back `rejected` with reason `no_control`. For example, once an item is in the cart, a product page can replace "Add to cart" with "Go to cart", so `click add to cart` finds nothing and says so.
+A step that names a control the page no longer carries comes back `rejected`. For example, once an item is in the cart, a product page can replace "Add to cart" with "Go to cart", so `click add to cart` finds nothing.
 
-The server does not guess whether that means the work is already done. In testing, that guess marked steps finished that had never run. A step that already looks satisfied still runs, and it still reports what happened. End the series with a `read` step and decide from the cart's own words.
+Two different things cause that, and the caller acts differently on each: the page cannot do the step at all, or the page already shows the step's outcome. The server does not guess from the URL or the title, because that guess marked steps finished that had never run. Jev reads the page instead, and an outcome already in place comes back as `rejected` with reason `already_done`.
+
+The series carries on past an `already_done` step, because the ground the next step stands on is there, whoever put it there. The group still reports `rejected`, so a run reads honestly, and `verified` says where it landed.
 
 ## Call run_action
 
@@ -187,12 +210,15 @@ A group's `status` is worst-case across its steps, so a group where eight of ten
 
 Later steps depend on earlier ones, so a step that does not complete ends its series, and the rest come back as `skipped` naming the step that stopped them. Set `noFail` on a series whose steps are independent, and it runs them all.
 
+One reason is exempt. A step that came back `rejected` with `already_done` did not stop anything, because what the next step needs is already on the page.
+
 ### Why a step was turned down
 
 | `reason`                            | Meaning                                                  |
 | ----------------------------------- | -------------------------------------------------------- |
 | `no_control`                        | A `click` or press found no control that does what the step named |
 | `no_match`                          | An `open the … result` step found no matching entry      |
+| `already_done`                      | The control is gone because the page already shows the outcome |
 | `unavailable`                       | Out of stock, sold out, or not delivered here            |
 | `other_route`                       | The page offers a different route, such as other sellers |
 | `wrong_page`                        | The page is not about the wanted thing                   |

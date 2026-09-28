@@ -31,6 +31,12 @@ export type BlockReason =
   | "no_control"
   /** A pick step found no matching entry, or Jev chose none among the candidates. */
   | "no_match"
+  /**
+   * The control is absent because the page already shows the step's outcome,
+   * such as a product page reading "Go to cart". Jev judges this, so the
+   * caller can carry on where `no_control` would tell it to stop.
+   */
+  | "already_done"
   | "unknown";
 
 /** Why the Jev provider or network stopped the series. Not a page answer. */
@@ -47,6 +53,23 @@ export type EndpointReason =
 /** Page answer or provider fault carried on a stopped step and its handoff. */
 export type StopReason = BlockReason | EndpointReason;
 
+/**
+ * Steps to repeat until the page shows `until`. Jev reads the live page after
+ * every round and answers whether the condition holds, so the loop ends on the
+ * page's own evidence rather than on a control disappearing.
+ */
+export interface LoopSpec {
+  /** Steps to run, in order, once per round. */
+  tasks: string[];
+  /** What the finished page shows. Judged after every round. */
+  until: string;
+  /** Hard ceiling on rounds. Default 12, never above 50. */
+  maxRounds?: number;
+}
+
+/** One step of a series: a written step, or a loop over written steps. */
+export type TaskStep = string | { loop: LoopSpec };
+
 export interface TaskGroupSpec {
   /** Parent label for this tab's series. */
   id?: string;
@@ -57,7 +80,7 @@ export interface TaskGroupSpec {
   /** One task if `tasks` is omitted. Parent writes the list. */
   goal?: string;
   /** Serial tasks on this tab. */
-  tasks?: string[];
+  tasks?: TaskStep[];
   /** Keep going after a step that did not complete. Off by default. */
   noFail?: boolean;
   /** Text that proves this series worked. Checked on the final page. */
@@ -74,6 +97,8 @@ export interface TaskResult {
   ms?: number;
   /** What the page said. Set by a read step. */
   text?: string;
+  /** Rounds a loop step ran. Absent on every other step. */
+  rounds?: number;
 }
 
 /**
@@ -91,8 +116,8 @@ export interface Handoff {
   stoppedAt: string;
   status: RunStatus;
   reason?: StopReason;
-  /** Steps that never ran. */
-  remaining: string[];
+  /** Steps that never ran. Pass them straight back to resume. */
+  remaining: TaskStep[];
   /** The last few actions, for the parent to read before deciding. */
   recent: RunStep[];
 }
@@ -129,7 +154,7 @@ export interface RunActionInput {
   /** One task. Not split. Optional when `tasks` or `groups` is set. */
   goal?: string;
   /** Parent-written serial tasks on one tab. */
-  tasks?: string[];
+  tasks?: TaskStep[];
   /** Parent-written parallel groups. Each group is a series on its own tab. */
   groups?: TaskGroupSpec[];
   /** Keep going after a step that did not complete. Off by default. */

@@ -123,10 +123,12 @@ const typesafeClient = (config: JevConfig): TypeSafeClient =>
     apiKey: config.apiKey,
     baseURL: config.baseUrl,
     defaultModel: config.model,
-    timeout: 20_000,
-    // Fail loud on the first provider answer. The series stops and stays
-    // resumable; silent multi-minute retries hid proxy and auth faults.
-    retry: { maxRetries: 0 },
+    timeout: 15_000,
+    // One retry rides out the blip an upstream gateway answers with a 503,
+    // and no more. A fault that survives it is real, and the series stops on
+    // it: a longer retry ladder spends the whole run's deadline before the
+    // caller hears that the endpoint is down.
+    retry: { maxRetries: 1 },
     logLevel: "error",
     logger: stderrLogger,
   });

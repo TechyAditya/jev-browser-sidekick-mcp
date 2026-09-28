@@ -251,60 +251,50 @@ export const findLabelCandidates = async (
     .slice(0, limit);
 };
 
-/** Press a repeating control until the page stops offering it. */
-export const pressUntilGone = async (
+/** Enough of the page to tell one state from the next. */
+export const treeSignature = async (
   browser: PlaywrightSession,
   targetId: string,
-  labels: string[],
-  limit = 20,
-): Promise<{ pressed: number; left: number; detail: string }> => {
-  const matches = (name: string): boolean => matchesActionLabel(name, labels);
-  let pressed = 0;
-  let stale = 0;
-  let previous = Number.POSITIVE_INFINITY;
-  // A cart the page draws for itself is empty at the moment it loads, and an
-  // empty-looking page would end this before the first delete control exists.
-  await browser.settle(targetId, 1500);
-  for (let round = 0; round < limit; round += 1) {
-    const before = await browser.listTabs().catch(() => [] as string[]);
-    const snap = await browser.snapshot(targetId).catch(() => undefined);
-    let hits = (snap?.elements ?? []).filter(
-      (row) => !row.disabled && !isShortcutDecoy(row) && row.name.trim() && matches(row.name),
-    );
-    // A cart drawn without roles keeps its remove controls out of the
-    // snapshot, so an empty list is not proof of an empty cart.
-    if (!hits.length) {
-      hits = (await findTextControls(browser, targetId, labels)).filter((row) =>
-        matches(row.name),
-      );
-    }
-    if (!hits.length) {
-      return { pressed, left: 0, detail: pressed ? `pressed ${pressed}` : "nothing to press" };
-    }
+): Promise<string> => {
+  const snap = await browser.snapshot(targetId).catch(() => undefined);
+  if (!snap) return "";
+  const names = snap.elements
+    .slice(0, 60)
+    .map((el) => `${el.role}:${el.name}`)
+    .join("|");
+  return `${snap.url ?? ""}#${snap.elements.length}#${names}`;
+};
 
-  // Pressing must remove one. If the count holds, the wrong thing is being
-    // pressed, so stop instead of hammering the page. Allow a few rounds,
-    // because a cart that asks "remove this item?" needs a second press to
-    // confirm and the count does not move in between.
-    if (hits.length >= previous) stale += 1;
-    else stale = 0;
-    if (stale >= 4) {
-      return { pressed, left: hits.length, detail: `stopped, ${hits.length} left after ${pressed}` };
+/**
+ * Wait for the page's own scripts rather than for a fixed time. A row that a
+ * site deletes over the network lands whenever its request comes back, so this
+ * polls the tree and returns once it stops changing.
+ */
+export const settleUntilQuiet = async (
+  browser: PlaywrightSession,
+  targetId: string,
+  opts: { minMs?: number; maxMs?: number; quietRounds?: number } = {},
+): Promise<{ ms: number; changed: boolean; signature: string }> => {
+  const minMs = opts.minMs ?? 400;
+  const maxMs = Math.max(opts.maxMs ?? 6000, minMs);
+  const quietTarget = opts.quietRounds ?? 2;
+  const startedAt = Date.now();
+  await browser.settle(targetId, minMs);
+  const first = await treeSignature(browser, targetId);
+  let last = first;
+  let quiet = 0;
+  while (Date.now() - startedAt < maxMs) {
+    await browser.settle(targetId, 300);
+    const now = await treeSignature(browser, targetId);
+    if (now === last) {
+      quiet += 1;
+      if (quiet >= quietTarget) break;
+      continue;
     }
-    previous = hits.length;
-
-    const outcome = await clickStable(browser, targetId, hits[0]!);
-    if (!outcome.ok) return { pressed, left: hits.length, detail: outcome.detail };
-    pressed += 1;
-    await browser.settle(targetId, 1500);
-
-    // A press that opened a tab did something else; close it and stay here.
-    const after = await browser.listTabs().catch(() => [] as string[]);
-    for (const id of after.filter((row) => !before.includes(row) && row !== targetId)) {
-      await browser.closeTab(id).catch(() => undefined);
-    }
+    quiet = 0;
+    last = now;
   }
-  return { pressed, left: -1, detail: `stopped after ${limit} rounds` };
+  return { ms: Date.now() - startedAt, changed: last !== first, signature: last };
 };
 
 /**

@@ -1,5 +1,9 @@
 import { resolveTasks } from "./extract.js";
-import type { RunActionInput, TaskGroupSpec } from "./types.js";
+import type { RunActionInput, TaskGroupSpec, TaskStep } from "./types.js";
+
+/** A loop written out, so traces, motives, and handoffs read like steps. */
+export const stepText = (step: TaskStep): string =>
+  typeof step === "string" ? step : `repeat [${step.loop.tasks.join("; ")}] until ${step.loop.until}`;
 
 export interface PlannedGroup {
   id: string;
@@ -7,7 +11,7 @@ export interface PlannedGroup {
   groupId?: string;
   startUrl?: string;
   goal?: string;
-  tasks: string[];
+  tasks: TaskStep[];
   /** Keep going after a step that did not complete. */
   noFail: boolean;
   /** Text that proves this series worked. Checked on the final page. */

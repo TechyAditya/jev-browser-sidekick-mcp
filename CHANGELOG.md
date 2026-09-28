@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-28
+
+### Added
+
+- Task loops. A step can be written as `repeat <step> until <words>`, and a
+  `tasks` entry can be a `{ loop: { tasks, until, maxRounds } }` object for a
+  body of more than one step. Jev reads the live page after every round and
+  answers whether the condition holds, so a loop ends on the page's own
+  evidence rather than on a control disappearing. Between rounds the server
+  waits for the page's own scripts instead of a fixed pause. Every loop is
+  bounded by the condition, `maxRounds` (12 by default, 50 at most), the call
+  deadline, the step budget, and two rounds that change nothing. Loop steps
+  report `rounds`.
+- Reason `already_done`. A control missing because the page already shows the
+  step's outcome now reads differently from a control the page never had, and
+  the series carries on past it. Jev judges it from the page; no URL or title
+  heuristic is involved.
+
+### Changed
+
+- `keep clicking <label>` and `clear <thing>` run on the loop engine. Each
+  derives its own condition, and `dismiss all <thing>` now presses Dismiss or
+  Close rather than a control named after the thing.
+- Two retries on a Jev call, restored from none. An upstream gateway that
+  answers one request with a 503 no longer ends a run, while a fault that
+  survives the retries still stops the series with its own reason.
+
 ## [0.1.5] - 2026-09-28
 
 ### Fixed

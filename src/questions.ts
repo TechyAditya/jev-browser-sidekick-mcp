@@ -168,6 +168,9 @@ export const buildBlockerQuestions = (task: string): Questions => ({
     type: "noul",
     instructions: `Task: ${task}. The page in the state offers no way to do that task.`,
   },
+  // Asked in the same call: the questions share one state, answer in parallel,
+  // and this one costs a few output tokens. https://docs.typesafe.ai/patterns/fan-out
+  ...buildOutcomeQuestions(task),
   blocker: {
     type: "choice",
     instructions: `Task: ${task}. Choose the one reason the page offers no way to do it.`,
@@ -180,6 +183,37 @@ export const buildBlockerQuestions = (task: string): Questions => ({
       wrong_page: "This page is not about the wanted thing at all.",
       not_ready: "The page is still loading, or the part needed has not appeared yet.",
       other_route: "The page offers a different route, such as other sellers or buying options.",
+    },
+  },
+});
+
+/**
+ * A loop ends on the page's own evidence, never on a control disappearing:
+ * a site that redraws its list mid-round would otherwise read as finished.
+ */
+export const buildLoopQuestions = (until: string, roundsDone: number): Questions => ({
+  loop_done: {
+    type: "noul",
+    instructions: `A step is being repeated until this holds: ${until}. Read the live page in \`page_title\`, \`page_text\`, and \`page_elements\`, and answer whether it holds now. ${roundsDone} rounds have run, which is evidence of nothing on its own. Answer true only for what the page shows, not for what one more round could reach.`,
+    criteria: {
+      true: "The page shows the condition holds, so another round would do nothing.",
+      false: "The page does not show it yet, so another round is due.",
+    },
+  },
+});
+
+/**
+ * An absent control means one of two things, and the caller acts differently
+ * on each: the page cannot do the step at all, or the page already shows the
+ * step's outcome. Only the page says which, so Jev reads it.
+ */
+export const buildOutcomeQuestions = (task: string): Questions => ({
+  already_done: {
+    type: "noul",
+    instructions: `Task: ${task}. No control on this page carries out that task. Judge one thing: does the page already show that task's outcome? Read \`page_title\`, \`page_text\`, and \`page_elements\`, and use \`steps_done\` when it is there. Judge the page as it stands, not what a later step could reach.`,
+    criteria: {
+      true: "The outcome is already in place: the control the task would press has been replaced by the one that follows it, such as Go to cart where Add to cart was, or the page already is the thing the task asked to open.",
+      false: "The outcome is not in place. This page simply cannot do the task.",
     },
   },
 });

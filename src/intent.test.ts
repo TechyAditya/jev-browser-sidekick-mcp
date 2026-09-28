@@ -75,16 +75,41 @@ test("a read step asks for the page's words", () => {
 });
 
 test("repetition is the shape; clearing a cart is one use of it", () => {
-  // A container has no label of its own, so fall back to a remove control.
+  // The verb names the thing, so the control comes from the verb itself.
   const clear = parseIntent("clear cart");
-  assert.equal(clear.kind, "repeat");
+  assert.equal(clear.kind, "loop");
   assert.deepEqual(clear.actionLabels, ["delete", "remove"]);
+  assert.match(clear.loop?.until ?? "", /cart is empty/i);
 
   // A step that names its own control keeps it, on any kind of page.
   const more = parseIntent("keep clicking Load more");
-  assert.equal(more.kind, "repeat");
+  assert.equal(more.kind, "loop");
   assert.deepEqual(more.actionLabels, ["Load more"]);
-  assert.deepEqual(parseIntent("dismiss all notifications").actionLabels, ["notifications"]);
+  assert.equal(more.loop?.bodyTask, "click Load more");
+  assert.match(more.loop?.until ?? "", /no longer offers a "Load more" control/);
+
+  // "dismiss all" names the thing too, and Dismiss is the control for it.
+  assert.deepEqual(parseIntent("dismiss all notifications").actionLabels, ["dismiss", "close"]);
+});
+
+test("a loop says its own condition, and the body is an ordinary step", () => {
+  const loop = parseIntent("repeat click remove until the cart is empty");
+  assert.equal(loop.kind, "loop");
+  assert.equal(loop.loop?.bodyTask, "click remove");
+  assert.equal(loop.loop?.until, "the cart is empty");
+  assert.equal(loop.loop?.body.kind, "press");
+  assert.deepEqual(loop.loop?.body.actionLabels, ["remove"]);
+
+  // The condition splits on the last "until", so a body may contain the word.
+  const nested = parseIntent("repeat click show more until no more rows appear");
+  assert.equal(nested.loop?.bodyTask, "click show more");
+  assert.equal(nested.loop?.until, "no more rows appear");
+
+  // A caller who writes the condition wins over the derived one.
+  assert.equal(
+    parseIntent("keep clicking Load more until every review is shown").loop?.until,
+    "every review is shown",
+  );
 });
 
 test("the same shapes work away from shopping", () => {

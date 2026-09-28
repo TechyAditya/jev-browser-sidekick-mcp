@@ -46,7 +46,7 @@ const ACT_ON_VERBS =
   /^(?:add|buy|order|book|subscribe|register|reserve|download|upload|install|apply|save|send|post|share|follow)\b/i;
 
 /**
- * Press the same control until the page stops offering it.
+ * Run the same step again until the page shows the work is finished.
  *
  * "clear the cart" is one use of this, not the shape itself: the shape is
  * repetition, and any page that lists removable things needs it. A step can
@@ -55,8 +55,24 @@ const ACT_ON_VERBS =
 const REPEAT_VERBS =
   /^(?:keep\s+(?:clicking|pressing)|press\s+every|click\s+every|remove\s+(?:all|every)|delete\s+(?:all|every)|dismiss\s+all|clear|empty)\b/i;
 
+/** "repeat <step> until <condition>": the body is a step in its own right. */
+const LOOP_VERBS = /^(?:repeat|keep\s+doing|loop)\b/i;
+
+/**
+ * The verb names the control: "keep clicking Load more". Every other repeat
+ * verb names the thing instead, and the verb itself says which control acts
+ * on it: "dismiss all banners" presses Dismiss, "clear cart" presses Remove.
+ */
+const CONTROL_LOOP = /^(?:keep\s+(?:clicking|pressing)|press\s+every|click\s+every)\b/i;
+
 /** The control a bare "clear <thing>" is asking for. */
 const CLEAR_LABELS = ["delete", "remove"];
+
+/** Which control family a thing-naming verb is asking for. */
+const VERB_LABELS: Array<[RegExp, string[]]> = [
+  [/^dismiss\b/i, ["dismiss", "close"]],
+  [/^(?:remove|delete|clear|empty)\b/i, CLEAR_LABELS],
+];
 
 /** Hand the page's own words back to the caller. No judgment, no click. */
 const READ_VERBS = /^(?:read|show|list|report|extract)\b/i;
@@ -67,7 +83,7 @@ const READ_VERBS = /^(?:read|show|list|report|extract)\b/i;
  */
 const LIST_WORDS = /\b(?:results?|matching|best match|listings?|entry|entries|first|top)\b/i;
 
-export type IntentKind = "search" | "press" | "goto" | "pick" | "repeat" | "read" | "free";
+export type IntentKind = "search" | "press" | "goto" | "pick" | "loop" | "read" | "free";
 
 export interface TaskIntent {
   kind: IntentKind;
@@ -79,6 +95,17 @@ export interface TaskIntent {
   query?: string;
   /** A page the task wants to land on. */
   destination?: string;
+  /** Set on a loop: the step to run each round, and what ends the loop. */
+  loop?: LoopIntent;
+}
+
+export interface LoopIntent {
+  /** The step to run each round, written as a step. */
+  bodyTask: string;
+  /** That step already parsed, so a derived body keeps its labels. */
+  body: TaskIntent;
+  /** What the finished page shows. Jev judges it after every round. */
+  until: string;
 }
 
 const clean = (value: string): string => value.replace(/["'`]/g, "").replace(/\s+/g, " ").trim();
@@ -90,6 +117,37 @@ const meaningful = (value: string): string =>
     .join(" ");
 
 const afterVerb = (text: string, verb: RegExp): string => clean(text.replace(verb, ""));
+
+/**
+ * Split on the last "until", so a body that contains the word keeps it.
+ * A step with no "until" leaves the condition empty and the caller derives one.
+ */
+const splitUntil = (text: string): { body: string; until: string } => {
+  const parts = /^([\s\S]*)\s+until\s+([\s\S]+)$/i.exec(clean(text));
+  if (!parts) return { body: clean(text), until: "" };
+  return { body: clean(parts[1] ?? ""), until: clean(parts[2] ?? "") };
+};
+
+/**
+ * What the page shows when a loop is over, for a step that did not say.
+ * Jev reads this literally, so it names the evidence rather than the goal.
+ */
+const defaultUntil = (body: TaskIntent, subject: string): string => {
+  const labels = body.actionLabels;
+  if (!labels.length) return `the page shows that "${subject}" is finished and another round would do nothing`;
+  const named = labels.map((label) => `"${label}"`).join(" or ");
+  if (body.actionLabels.length > 1) {
+    return `the ${subject} is empty: no entries left, and no ${named} control on the page`;
+  }
+  return `the page no longer offers a ${named} control`;
+};
+
+const asLoop = (bodyTask: string, body: TaskIntent, until: string): TaskIntent => ({
+  kind: "loop",
+  actionLabels: body.actionLabels,
+  subject: body.subject,
+  loop: { bodyTask, body, until },
+});
 
 /**
  * One parent-written step becomes one kind of work. The words in the task are
@@ -113,14 +171,29 @@ const parseAction = (text: string): TaskIntent => {
     return { kind: "read", actionLabels: [], subject: meaningful(afterVerb(text, READ_VERBS)) };
   }
 
+  // "repeat <step> until <condition>" says the repetition outright, and the
+  // body is an ordinary step, so it parses like any other.
+  if (LOOP_VERBS.test(text)) {
+    const { body, until } = splitUntil(afterVerb(text, LOOP_VERBS));
+    const inner = parseAction(body);
+    return asLoop(body, inner, until || defaultUntil(inner, body));
+  }
+
   if (REPEAT_VERBS.test(text)) {
-    const tail = afterVerb(text, REPEAT_VERBS);
-    // "keep clicking Load more" names its control. "clear the cart" does not,
-    // so fall back to the words a remove control usually carries.
-    const named = clean(tail.replace(/\buntil\b[\s\S]*$/i, "").replace(/\bbutton\b/i, ""));
-    const looksLikeContainer = /\b(cart|basket|list|bag|selection|filters?)\b/i.test(named);
-    const actionLabels = named && !looksLikeContainer ? [named] : CLEAR_LABELS;
-    return { kind: "repeat", actionLabels, subject: meaningful(tail) };
+    const verb = text.match(REPEAT_VERBS)?.[0] ?? "";
+    const { body: tail, until } = splitUntil(afterVerb(text, REPEAT_VERBS));
+    const named = clean(tail.replace(/\bbutton\b/i, ""));
+    // "keep clicking Load more" names its control. "clear the cart" names the
+    // thing, and the verb itself says which control clears it.
+    if (CONTROL_LOOP.test(verb) && named) {
+      const inner: TaskIntent = { kind: "press", actionLabels: [named], subject: meaningful(named) };
+      return asLoop(`click ${named}`, inner, until || defaultUntil(inner, named));
+    }
+    const labels = VERB_LABELS.find(([match]) => match.test(verb))?.[1] ?? CLEAR_LABELS;
+    const thing = meaningful(named) || "list";
+    const inner: TaskIntent = { kind: "press", actionLabels: labels, subject: thing };
+    const bodyTask = `click the ${labels.join(" or ")} control for one entry in the ${thing}`;
+    return asLoop(bodyTask, inner, until || defaultUntil(inner, thing));
   }
 
   if (SEARCH_VERBS.test(text)) {

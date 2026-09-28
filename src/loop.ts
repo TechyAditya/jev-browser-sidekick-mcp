@@ -11,11 +11,12 @@ import {
   findLabelCandidates,
   findLinkTo,
   followNewTab,
-  pressUntilGone,
   reachedDestination,
   readPageText,
   searchOnPage,
+  settleUntilQuiet,
   showsChoice,
+  treeSignature,
   type LabelCandidate,
 } from "./act.js";
 import { matchesActionLabel, parseIntent, type TaskIntent } from "./intent.js";
@@ -25,13 +26,15 @@ import { createTrace, noTrace, type Trace } from "./trace.js";
 import { classifyProviderError, isEndpointError, isEndpointReason } from "./endpoint.js";
 import { choiceOf, createJevClient, noulOf, type DecisionUsage, type JevClient } from "./jev.js";
 import { log } from "./log.js";
-import { clusterByTab, resolveGroups, type PlannedGroup } from "./plan.js";
+import { clusterByTab, resolveGroups, stepText, type PlannedGroup } from "./plan.js";
 import { connectPlaywright, type PlaywrightSession } from "./playwright.js";
 import {
   availableOperations,
   buildActionSpace,
   buildBlockerQuestions,
   buildControlQuestions,
+  buildLoopQuestions,
+  buildOutcomeQuestions,
   buildQuestions,
   controlOption,
   describeCandidate,
@@ -65,6 +68,7 @@ import type {
   RunStep,
   StopReason,
   TaskResult,
+  TaskStep,
   UsageTotals,
 } from "./types.js";
 
@@ -74,10 +78,20 @@ const STATE_CAP = 4000;
 const READ_CAP = 6000;
 /** Prior outcomes stay short so motive + history stays near 1% of the state budget. */
 const STEPS_DONE_CAP = 600;
+/** Page words the loop judge reads, on top of the element list. */
+const LOOP_TEXT_CAP = 1200;
+/** Rounds a loop runs when the caller names no ceiling. */
+const LOOP_ROUNDS_DEFAULT = 12;
+/** Rounds no loop may exceed, whatever the caller asks for. */
+const LOOP_ROUNDS_MAX = 50;
+/** Rounds that change nothing before the loop gives up. */
+const LOOP_STALL_LIMIT = 2;
+/** How sure Jev must be that the page shows the loop's condition. */
+const LOOP_DONE_NOUL = 0.6;
 
 /** The series motive: an explicit goal, or the planned tasks joined. */
 const seriesMotive = (group: PlannedGroup): string =>
-  clip((group.goal?.trim() || group.tasks.join("; ")).trim(), 240);
+  clip((group.goal?.trim() || group.tasks.map(stepText).join("; ")).trim(), 240);
 
 /** One short clause per finished task so Jev sees why earlier steps landed. */
 const formatStepsDone = (prior: TaskResult[]): string => {
@@ -91,6 +105,65 @@ const formatStepsDone = (prior: TaskResult[]): string => {
       .join(" | "),
     STEPS_DONE_CAP,
   );
+};
+
+/**
+ * Did this step stop the series? A step the page already satisfied did not:
+ * the ground the next step stands on is there, whoever put it there.
+ */
+const stoppedSeries = (row: TaskResult): boolean =>
+  row.status !== "completed" && row.reason !== "already_done";
+
+/** A planned step written out, or undefined past the end of the list. */
+const at = (steps: TaskStep[], index: number): string | undefined => {
+  const step = steps[index];
+  return step === undefined ? undefined : stepText(step);
+};
+
+/** What every step hands back, loop or not. */
+interface TaskOutcome {
+  status: RunStatus;
+  summary: string;
+  reason?: StopReason;
+  /** What a read step found. */
+  text?: string;
+  url: string;
+  title: string;
+  targetId: string;
+  /** Rounds a loop ran. Absent on every other step. */
+  rounds?: number;
+}
+
+/** One step of a loop body. A derived body carries the intent it was built from. */
+interface LoopBody {
+  task: string;
+  intent?: TaskIntent;
+}
+
+const clampRounds = (asked?: number): number =>
+  Number.isFinite(asked)
+    ? Math.min(Math.max(Math.trunc(asked as number), 1), LOOP_ROUNDS_MAX)
+    : LOOP_ROUNDS_DEFAULT;
+
+/**
+ * Is this step a loop? Both surfaces land here: the structured `loop` field,
+ * and a written step such as "repeat click remove until the cart is empty".
+ */
+const loopPlanFor = (
+  step: TaskStep,
+): { body: LoopBody[]; until: string; maxRounds: number } | undefined => {
+  if (typeof step !== "string") {
+    const body = step.loop.tasks.filter(Boolean).map((task) => ({ task }));
+    if (!body.length || !step.loop.until?.trim()) return undefined;
+    return { body, until: step.loop.until.trim(), maxRounds: clampRounds(step.loop.maxRounds) };
+  }
+  const intent = parseIntent(step);
+  if (intent.kind !== "loop" || !intent.loop) return undefined;
+  return {
+    body: [{ task: intent.loop.bodyTask, intent: intent.loop.body }],
+    until: intent.loop.until,
+    maxRounds: clampRounds(),
+  };
 };
 
 const noUsage = (): UsageTotals => ({
@@ -186,8 +259,8 @@ export const runAction = async (
   const allow = buildAllowlist(cwd, input.contextPaths);
   const blob = [
     input.goal,
-    ...(input.tasks ?? []),
-    ...(input.groups ?? []).flatMap((group) => [group.goal, ...(group.tasks ?? [])]),
+    ...(input.tasks ?? []).map(stepText),
+    ...(input.groups ?? []).flatMap((group) => [group.goal, ...(group.tasks ?? []).map(stepText)]),
   ]
     .filter(Boolean)
     .join(" ");
@@ -337,8 +410,11 @@ const runGroup = async (ctx: {
       await browser.settle(targetId, 400);
     }
 
-    for (const task of group.tasks) {
-      const leftover = ctx.budget - steps.filter((row) => row.step > 0).length;
+    const stepsLeft = (): number => ctx.budget - steps.filter((row) => row.step > 0).length;
+
+    for (const step of group.tasks) {
+      const task = stepText(step);
+      const leftover = stepsLeft();
       if (leftover <= 0) {
         taskResults.push({ goal: task, status: "max_steps", summary: "no steps left" });
         break;
@@ -352,7 +428,9 @@ const runGroup = async (ctx: {
       // ends the series unless the caller asked to keep going. An endpoint
       // fault always stops the series: spending more steps on a dead provider
       // wastes work and can double-act on a shopping site after a bad resume.
-      const failed = taskResults.find((row) => row.status !== "completed");
+      // A step the page already satisfied is the exception the series is
+      // allowed to walk past, because the ground it stood on is there.
+      const failed = taskResults.find(stoppedSeries);
       if (failed && (!group.noFail || isEndpointReason(failed.reason))) {
         taskResults.push({
           goal: task,
@@ -363,7 +441,7 @@ const runGroup = async (ctx: {
       }
       const taskStartedAt = Date.now();
       try {
-        const outcome = await runTask({
+        const shared: Omit<StepContext, "maxSteps"> = {
           ...ctx,
           targetId,
           task,
@@ -376,10 +454,13 @@ const runGroup = async (ctx: {
           budget: createContextBudget(),
           deadline: ctx.deadline,
           steps,
-          maxSteps: Math.min(TASK_STEPS, leftover),
           currentUrl,
           currentTitle,
-        });
+        };
+        const plan = loopPlanFor(step);
+        const outcome = plan
+          ? await runLoop({ ...shared, ...plan, stepsLeft })
+          : await runTask({ ...shared, maxSteps: Math.min(TASK_STEPS, leftover) });
         currentUrl = outcome.url;
         currentTitle = outcome.title;
         // A task may have followed a link into its own tab; stay there.
@@ -390,6 +471,7 @@ const runGroup = async (ctx: {
           summary: outcome.summary,
           reason: outcome.reason,
           text: outcome.text,
+          ...(outcome.rounds === undefined ? {} : { rounds: outcome.rounds }),
           ...(input.debug ? { ms: Date.now() - taskStartedAt } : {}),
         });
       } catch (error) {
@@ -430,7 +512,7 @@ const runGroup = async (ctx: {
           : undefined;
     if (endpoint) {
       taskResults.push({
-        goal: group.tasks[taskResults.length] ?? group.id,
+        goal: at(group.tasks, taskResults.length) ?? group.id,
         status: endpoint.runStatus,
         summary: endpoint.summary,
         reason: endpoint.reason,
@@ -438,7 +520,7 @@ const runGroup = async (ctx: {
     } else {
       const message = error instanceof Error ? error.message : String(error);
       taskResults.push({
-        goal: group.tasks[taskResults.length] ?? group.id,
+        goal: at(group.tasks, taskResults.length) ?? group.id,
         status: "error",
         summary: message,
       });
@@ -447,10 +529,10 @@ const runGroup = async (ctx: {
 
   // A series that stopped early still owes the parent a row per step, so the
   // result names every step that never ran and the handoff can list them.
-  const stopper = taskResults.find((row) => row.status !== "completed");
-  for (const task of group.tasks.slice(taskResults.length)) {
+  const stopper = taskResults.find(stoppedSeries);
+  for (const step of group.tasks.slice(taskResults.length)) {
     taskResults.push({
-      goal: task,
+      goal: stepText(step),
       status: "skipped",
       summary: stopper ? `earlier step ${stopper.status}: ${clip(stopper.goal, 40)}` : "never ran",
     });
@@ -555,7 +637,7 @@ const buildHandoff = (ctx: {
   url: string;
   title: string;
 }): Handoff => {
-  const index = ctx.taskResults.findIndex((row) => row.status !== "completed");
+  const index = ctx.taskResults.findIndex(stoppedSeries);
   const stopped = index >= 0 ? ctx.taskResults[index]! : undefined;
   const remaining = index >= 0 ? ctx.group.tasks.slice(index + 1) : [];
   return {
@@ -566,7 +648,7 @@ const buildHandoff = (ctx: {
     groupId: ctx.groupId,
     url: ctx.url || undefined,
     title: ctx.title || undefined,
-    stoppedAt: stopped?.goal ?? ctx.group.tasks.at(-1) ?? ctx.group.id,
+    stoppedAt: stopped?.goal ?? at(ctx.group.tasks, ctx.group.tasks.length - 1) ?? ctx.group.id,
     status: ctx.status,
     reason: stopped?.reason,
     remaining,
@@ -574,7 +656,7 @@ const buildHandoff = (ctx: {
   };
 };
 
-const runTask = async (ctx: {
+interface StepContext {
   browser: PlaywrightSession;
   jev: JevClient;
   config: JevConfig;
@@ -601,19 +683,19 @@ const runTask = async (ctx: {
   maxSteps: number;
   currentUrl: string;
   currentTitle: string;
-}): Promise<{
-  status: RunStatus;
-  summary: string;
-  reason?: StopReason;
-  /** What a read step found. */
-  text?: string;
-  url: string;
-  title: string;
-  targetId: string;
-}> => {
+}
+
+const runTask = async (
+  ctx: StepContext & {
+    /** A derived step keeps the labels it was built from. */
+    intentOverride?: TaskIntent;
+    /** Ask Jev whether a refusal means the page already shows the outcome. */
+    judgeOutcome?: boolean;
+  },
+): Promise<TaskOutcome> => {
   const { browser, jev, config, task } = ctx;
   let targetId = ctx.targetId;
-  const intent = parseIntent(task);
+  const intent = ctx.intentOverride ?? parseIntent(task);
   const actionLabels = intent.actionLabels;
   const values = extractValueCandidates(task, ctx.input.values);
   const usedValues = new Set<string>();
@@ -630,6 +712,39 @@ const runTask = async (ctx: {
   const deadRefs = new Set<string>();
   let retries = 0;
   const taskDeadline = createDeadline(Math.min(config.taskTimeoutMs, ctx.deadline.left()));
+
+  /**
+   * The page turned the step down. Whether that means "this cannot be done
+   * here" or "this is already done" is the page's answer too, and the caller
+   * branches on it, so Jev reads the page rather than the harness guessing.
+   */
+  const refuse = async (reason: BlockReason, summary: string): Promise<TaskOutcome> => {
+    const here = { url: currentUrl, title: currentTitle, targetId };
+    if (ctx.judgeOutcome === false) {
+      return { status: "rejected", summary, reason, ...here };
+    }
+    const holds = await askAlreadyDone({
+      browser,
+      jev,
+      config,
+      task,
+      motive: ctx.motive,
+      priorResults: ctx.priorResults,
+      deadline: ctx.deadline,
+      trace: ctx.trace,
+      usage: ctx.usage,
+      ...here,
+    });
+    if (holds >= LOOP_DONE_NOUL) {
+      return {
+        status: "rejected",
+        summary: `${summary}, and the page already shows it done (noul=${holds.toFixed(2)})`,
+        reason: "already_done",
+        ...here,
+      };
+    }
+    return { status: "rejected", summary, reason, ...here };
+  };
 
   try {
     // Task boundaries make the isolation visible in the trace.
@@ -682,43 +797,6 @@ const runTask = async (ctx: {
         summary: shown ? `read ${shown.length} characters` : "the page gave no text",
         reason: shown ? undefined : "not_ready",
         text: shown ? clip(shown, READ_CAP) : undefined,
-        url: after?.url ?? currentUrl,
-        title: after?.title ?? currentTitle,
-        targetId,
-      };
-    }
-    // A repeat step presses the same control until the page stops offering it.
-    if (intent.kind === "repeat") {
-      const outcome = await pressUntilGone(browser, targetId, actionLabels);
-      ctx.steps.push({
-        step: ctx.steps.filter((row) => row.step > 0).length + 1,
-        group: ctx.groupId,
-        task,
-        operation: "CLICK",
-        detail: `harness ${outcome.detail}`,
-      });
-      const after = await browser.snapshot(targetId).catch(() => undefined);
-      // Pressing nothing is the page's answer, the same answer a single press
-      // gives, so it reads the same way. A cart page that shows its items as a
-      // summary with no delete beside them lands here, and calling that done
-      // would report an untouched cart as cleared.
-      if (outcome.pressed === 0) {
-        return {
-          status: "rejected",
-          summary: `no control on this page does "${clip(actionLabels[0] ?? task, 40)}"`,
-          reason: "no_control",
-          url: after?.url ?? currentUrl,
-          title: after?.title ?? currentTitle,
-          targetId,
-        };
-      }
-      // Giving up with controls still on the page is not a cleared cart.
-      const done = outcome.left === 0;
-      return {
-        status: done ? "completed" : "partial",
-        summary: done
-          ? `pressed ${outcome.pressed}, none left`
-          : `pressed ${outcome.pressed}, ${outcome.left < 0 ? "more" : outcome.left} still there`,
         url: after?.url ?? currentUrl,
         title: after?.title ?? currentTitle,
         targetId,
@@ -863,6 +941,19 @@ const runTask = async (ctx: {
         }),
       });
       if (why.blocked > 0.6 && why.reason !== "not_ready") {
+        // A page asking for a secret is handed back whatever else it shows.
+        // Otherwise an outcome already on the page outranks the page's own
+        // reason, because the caller carries on from one and stops at the other.
+        if (!HANDS_BACK.has(why.reason) && why.alreadyDone >= LOOP_DONE_NOUL) {
+          return {
+            status: "rejected",
+            summary: `the page already shows this done (noul=${why.alreadyDone.toFixed(2)})`,
+            reason: "already_done",
+            url: currentUrl,
+            title: currentTitle,
+            targetId,
+          };
+        }
         return {
           status: HANDS_BACK.has(why.reason) ? "blocked" : "rejected",
           summary: `${REJECTION[why.reason] ?? why.reason} (noul=${why.blocked.toFixed(2)})`,
@@ -905,14 +996,7 @@ const runTask = async (ctx: {
     // a filter facet came back as results.
     const pool = entries.length ? entries : intent.kind === "pick" ? [] : visible;
     if (intent.kind === "pick" && !pool.length) {
-      return {
-        status: "rejected",
-        summary: `no entry on this page matches "${clip(intent.subject || task, 40)}"`,
-        reason: "no_match",
-        url: currentUrl,
-        title: currentTitle,
-        targetId,
-      };
+      return refuse("no_match", `no entry on this page matches "${clip(intent.subject || task, 40)}"`);
     }
     // Only force a click when the page really offers choices and the last one worked.
     const mustChoose = !lastFailed && entries.length >= 2;
@@ -940,14 +1024,7 @@ const runTask = async (ctx: {
             targetId,
           };
         }
-        return {
-          status: "rejected",
-          summary: `no search box on this page`,
-          reason: "no_control",
-          url: currentUrl,
-          title: currentTitle,
-          targetId,
-        };
+        return refuse("no_control", "no search box on this page");
       }
     }
 
@@ -1035,35 +1112,20 @@ const runTask = async (ctx: {
     if (verdict.kind === "blocked") {
       // Looping or waiting out a named control means the control is not here.
       if (needAction && !acted) {
-        return {
-          status: "rejected",
-          summary: `no control on this page does "${clip(actionLabels[0] ?? task, 40)}" (${verdict.reason})`,
-          reason: "no_control",
-          url: currentUrl,
-          title: currentTitle,
-          targetId,
-        };
+        return refuse(
+          "no_control",
+          `no control on this page does "${clip(actionLabels[0] ?? task, 40)}" (${verdict.reason})`,
+        );
       }
       // Missing search box / empty decision is the page's answer, not a handoff.
       if (intent.kind === "search") {
-        return {
-          status: "rejected",
-          summary: `no search box on this page (${verdict.reason})`,
-          reason: "no_control",
-          url: currentUrl,
-          title: currentTitle,
-          targetId,
-        };
+        return refuse("no_control", `no search box on this page (${verdict.reason})`);
       }
       if (intent.kind === "pick") {
-        return {
-          status: "rejected",
-          summary: `no entry on this page matches "${clip(intent.subject || task, 40)}" (${verdict.reason})`,
-          reason: "no_match",
-          url: currentUrl,
-          title: currentTitle,
-          targetId,
-        };
+        return refuse(
+          "no_match",
+          `no entry on this page matches "${clip(intent.subject || task, 40)}" (${verdict.reason})`,
+        );
       }
       return { status: "blocked", summary: verdict.reason, url: currentUrl, title: currentTitle, targetId };
     }
@@ -1074,23 +1136,9 @@ const runTask = async (ctx: {
       (verdict.target === NO_CONTROL || !verdict.target)
     ) {
       if (intent.kind === "pick") {
-        return {
-          status: "rejected",
-          summary: `no entry on this page matches "${clip(intent.subject || task, 40)}"`,
-          reason: "no_match",
-          url: currentUrl,
-          title: currentTitle,
-          targetId,
-        };
+        return refuse("no_match", `no entry on this page matches "${clip(intent.subject || task, 40)}"`);
       }
-      return {
-        status: "rejected",
-        summary: `no control on this page does "${clip(actionLabels[0] ?? task, 40)}"`,
-        reason: "no_control",
-        url: currentUrl,
-        title: currentTitle,
-        targetId,
-      };
+      return refuse("no_control", `no control on this page does "${clip(actionLabels[0] ?? task, 40)}"`);
     }
 
     const sig = signature(verdict.operation, verdict.target);
@@ -1255,24 +1303,10 @@ const runTask = async (ctx: {
   // A step that named a control and never found it is the page's answer, not
   // a budget problem. Saying so beats letting the caller guess.
   if (needAction && !acted) {
-    return {
-      status: "rejected",
-      summary: `no control on this page does "${clip(actionLabels[0] ?? task, 40)}"`,
-      reason: "no_control",
-      url: currentUrl,
-      title: currentTitle,
-      targetId,
-    };
+    return refuse("no_control", `no control on this page does "${clip(actionLabels[0] ?? task, 40)}"`);
   }
   if (intent.kind === "pick") {
-    return {
-      status: "rejected",
-      summary: `no entry on this page matches "${clip(intent.subject || task, 40)}"`,
-      reason: "no_match",
-      url: currentUrl,
-      title: currentTitle,
-      targetId,
-    };
+    return refuse("no_match", `no entry on this page matches "${clip(intent.subject || task, 40)}"`);
   }
   return {
     status: "max_steps",
@@ -1281,6 +1315,145 @@ const runTask = async (ctx: {
     title: currentTitle,
     targetId,
   };
+};
+
+/**
+ * Run a body until the page shows the caller's condition.
+ *
+ * The condition is judged, never inferred from a control disappearing: a site
+ * that redraws its list between rounds offers no controls for a moment, and
+ * reading that as "finished" reported an untouched cart as cleared.
+ *
+ * Every exit is bounded, so a loop cannot run forever: the round ceiling, the
+ * run deadline, the step budget, a body step that hands back, and a stall
+ * guard for rounds that change nothing. The judge runs once more than the
+ * body, so the last round's work still gets its verdict.
+ */
+const runLoop = async (
+  ctx: Omit<StepContext, "maxSteps"> & {
+    body: LoopBody[];
+    until: string;
+    maxRounds: number;
+    /** Steps the whole call has left. Read fresh, because the body spends them. */
+    stepsLeft: () => number;
+  },
+): Promise<TaskOutcome> => {
+  let currentUrl = ctx.currentUrl;
+  let currentTitle = ctx.currentTitle;
+  let targetId = ctx.targetId;
+  let rounds = 0;
+  let worked = 0;
+  let stalls = 0;
+  let signature = await treeSignature(ctx.browser, targetId).catch(() => "");
+  const history = [...ctx.priorResults];
+
+  const out = (status: RunStatus, summary: string, reason?: StopReason): TaskOutcome => ({
+    status,
+    summary,
+    reason,
+    url: currentUrl,
+    title: currentTitle,
+    targetId,
+    rounds,
+  });
+
+  for (let round = 1; round <= ctx.maxRounds + 1; round += 1) {
+    const done = await askLoopDone({
+      browser: ctx.browser,
+      jev: ctx.jev,
+      config: ctx.config,
+      task: ctx.task,
+      until: ctx.until,
+      motive: ctx.motive,
+      priorResults: history,
+      rounds,
+      targetId,
+      url: currentUrl,
+      title: currentTitle,
+      deadline: ctx.deadline,
+      trace: ctx.trace,
+      usage: ctx.usage,
+    });
+    if (done >= LOOP_DONE_NOUL) {
+      return out(
+        "completed",
+        rounds
+          ? `${rounds} rounds, then the page showed: ${clip(ctx.until, 60)} (noul=${done.toFixed(2)})`
+          : `nothing to do, the page already showed: ${clip(ctx.until, 60)}`,
+      );
+    }
+    if (round > ctx.maxRounds) {
+      return out("partial", `ran ${rounds} rounds, the page still does not show: ${clip(ctx.until, 60)}`);
+    }
+    if (ctx.deadline.expired()) return out("max_steps", `ran out of time after ${rounds} rounds`);
+    if (ctx.stepsLeft() <= 0) return out("max_steps", `ran out of steps after ${rounds} rounds`);
+
+    let progress = false;
+    for (const body of ctx.body) {
+      const left = ctx.stepsLeft();
+      if (left <= 0) break;
+      const outcome = await runTask({
+        ...ctx,
+        targetId,
+        task: body.task,
+        intentOverride: body.intent,
+        // The round's own judge already answers "is this done", so a body
+        // step never pays for a second opinion on the same page.
+        judgeOutcome: false,
+        priorResults: history,
+        budget: createContextBudget(),
+        maxSteps: Math.min(TASK_STEPS, left),
+        currentUrl,
+        currentTitle,
+      });
+      currentUrl = outcome.url;
+      currentTitle = outcome.title;
+      targetId = outcome.targetId;
+      history.push({
+        goal: body.task,
+        status: outcome.status,
+        summary: outcome.summary,
+        reason: outcome.reason,
+      });
+      // A page asking for a password and a dead endpoint both end the loop,
+      // not just the round, and they keep their own status and reason.
+      if (outcome.status === "blocked" || outcome.status === "error") {
+        return { ...outcome, rounds };
+      }
+      if (outcome.status !== "completed") break;
+      progress = true;
+      worked += 1;
+    }
+
+    // Wait for the page's own scripts rather than a fixed pause: a row the
+    // site deletes over the network lands whenever its request comes back.
+    const quiet = await settleUntilQuiet(ctx.browser, targetId).catch(() => undefined);
+    const moved = quiet ? quiet.signature !== signature : false;
+    if (quiet) signature = quiet.signature;
+    rounds += 1;
+    stalls = progress || moved ? 0 : stalls + 1;
+    ctx.trace.record({
+      kind: "note",
+      name: "loop.round",
+      group: ctx.groupId,
+      task: ctx.task,
+      round: rounds,
+      progress,
+      moved,
+      stalls,
+      until: ctx.until,
+    });
+    if (stalls >= LOOP_STALL_LIMIT) {
+      return worked
+        ? out("partial", `${worked} rounds did work, then ${stalls} rounds changed nothing`)
+        : out(
+            "rejected",
+            `no control on this page does "${clip(ctx.body[0]?.task ?? ctx.task, 40)}"`,
+            "no_control",
+          );
+    }
+  }
+  return out("partial", `ran ${rounds} rounds`);
 };
 
 /**
@@ -1361,6 +1534,131 @@ const pickControl = async (ctx: {
   }
 };
 
+/**
+ * The page as Jev reads it when the question is about the page as a whole
+ * rather than about one control: the rendered words plus the element list.
+ */
+const pageState = async (
+  browser: PlaywrightSession,
+  targetId: string,
+  fields: Record<string, unknown>,
+  hints: string[],
+  fallback: { url: string; title: string },
+): Promise<string> => {
+  const snap = await browser.snapshot(targetId).catch(() => undefined);
+  const visible = (snap?.elements ?? []).filter((el) => !isNoise(el));
+  const shown = await readPageText(browser, targetId).catch(() => "");
+  return JSON.stringify({
+    ...fields,
+    page_url: shortUrl(snap?.url || fallback.url),
+    page_title: clip(snap?.title || fallback.title, 60),
+    page_text: clip(shown, LOOP_TEXT_CAP),
+    page_elements: elementTable(prioritize(visible, 24, hints), 24),
+  });
+};
+
+/** Does the page show the loop's condition yet? A judgment, so Jev answers it. */
+const askLoopDone = async (ctx: {
+  browser: PlaywrightSession;
+  jev: JevClient;
+  config: JevConfig;
+  task: string;
+  until: string;
+  motive: string;
+  priorResults: TaskResult[];
+  rounds: number;
+  targetId: string;
+  url: string;
+  title: string;
+  deadline: Deadline;
+  trace: Trace;
+  usage: UsageTotals;
+}): Promise<number> => {
+  const state = await pageState(
+    ctx.browser,
+    ctx.targetId,
+    {
+      motive: ctx.motive,
+      steps_done: formatStepsDone(ctx.priorResults) || null,
+      current_task: ctx.task,
+      rounds_done: ctx.rounds,
+      wanted: ctx.until,
+    },
+    [ctx.until],
+    { url: ctx.url, title: ctx.title },
+  );
+  try {
+    const questions = buildLoopQuestions(ctx.until, ctx.rounds);
+    const decision = await withTimeout(
+      ctx.jev.decide(state as EntryType, questions),
+      ctx.deadline.cap(ctx.config.callTimeoutMs),
+      "jev loop",
+    );
+    addUsage(ctx.usage, decision.usage, "decision");
+    ctx.trace.record({ kind: "decision", name: "loop_done", state, questions, answers: decision.answers });
+    return noulOf(decision.answers, "loop_done");
+  } catch (error) {
+    if (isEndpointError(error) || error instanceof TimeoutError) {
+      throw isEndpointError(error) ? error : classifyProviderError(error);
+    }
+    // An unreadable page is not evidence that the work is finished.
+    return 0;
+  }
+};
+
+/**
+ * The control is missing. Does the page already show the step's outcome? The
+ * caller branches on the answer, so it comes from the page, not from the URL.
+ */
+const askAlreadyDone = async (ctx: {
+  browser: PlaywrightSession;
+  jev: JevClient;
+  config: JevConfig;
+  task: string;
+  motive: string;
+  priorResults: TaskResult[];
+  targetId: string;
+  url: string;
+  title: string;
+  deadline: Deadline;
+  trace: Trace;
+  usage: UsageTotals;
+}): Promise<number> => {
+  const state = await pageState(
+    ctx.browser,
+    ctx.targetId,
+    {
+      motive: ctx.motive,
+      steps_done: formatStepsDone(ctx.priorResults) || null,
+      current_task: ctx.task,
+    },
+    [ctx.task],
+    { url: ctx.url, title: ctx.title },
+  );
+  try {
+    const questions = buildOutcomeQuestions(ctx.task);
+    const decision = await withTimeout(
+      ctx.jev.decide(state as EntryType, questions),
+      ctx.deadline.cap(ctx.config.callTimeoutMs),
+      "jev outcome",
+    );
+    addUsage(ctx.usage, decision.usage, "decision");
+    ctx.trace.record({
+      kind: "decision",
+      name: "already_done",
+      state,
+      questions,
+      answers: decision.answers,
+    });
+    return noulOf(decision.answers, "already_done");
+  } catch (error) {
+    if (isEndpointError(error) || error instanceof TimeoutError) {
+      throw isEndpointError(error) ? error : classifyProviderError(error);
+    }
+    return 0;
+  }
+};
+
 /** Why can the page not do this? A judgment, so Jev answers it. */
 const askWhyBlocked = async (ctx: {
   jev: JevClient;
@@ -1370,7 +1668,7 @@ const askWhyBlocked = async (ctx: {
   deadline: Deadline;
   trace: Trace;
   usage: UsageTotals;
-}): Promise<{ blocked: number; reason: BlockReason }> => {
+}): Promise<{ blocked: number; reason: BlockReason; alreadyDone: number }> => {
   try {
     const questions = buildBlockerQuestions(ctx.task);
     const decision = await withTimeout(
@@ -1389,12 +1687,13 @@ const askWhyBlocked = async (ctx: {
     return {
       blocked: noulOf(decision.answers, "blocked"),
       reason: (choiceOf(decision.answers, "blocker")?.choice as BlockReason) ?? "unknown",
+      alreadyDone: noulOf(decision.answers, "already_done"),
     };
   } catch (error) {
     if (isEndpointError(error) || error instanceof TimeoutError) {
       throw isEndpointError(error) ? error : classifyProviderError(error);
     }
-    return { blocked: 0, reason: "unknown" };
+    return { blocked: 0, reason: "unknown", alreadyDone: 0 };
   }
 };
 

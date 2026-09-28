@@ -1,3 +1,5 @@
+import type { TaskStep } from "./types.js";
+
 const URL_RE = /https?:\/\/[^\s,;]+/gi;
 const DOMAIN_RE = /(?:^|[\s,;])((?:[a-z0-9-]+\.)+[a-z]{2,})(?=[\s,;]|$)/gi;
 const QUOTE_RE = /["“]([^"”]{1,120})["”]/g;
@@ -90,8 +92,11 @@ export const extractFindTerms = (goal: string): string[] =>
 /** Parent writes the list. A lone goal stays one task. */
 export const MAX_TASKS_PER_GROUP = 24;
 
-export const resolveTasks = (explicit?: string[], fallbackGoal?: string): string[] => {
-  const listed = (explicit ?? []).map((row) => row.trim()).filter(Boolean);
+export const resolveTasks = (explicit?: TaskStep[], fallbackGoal?: string): TaskStep[] => {
+  const listed = (explicit ?? [])
+    .map((row) => (typeof row === "string" ? row.trim() : row))
+    // A loop with no body runs nothing, so drop it rather than spin on it.
+    .filter((row) => (typeof row === "string" ? Boolean(row) : row.loop?.tasks?.some(Boolean)));
   if (listed.length) return listed.slice(0, MAX_TASKS_PER_GROUP);
   const text = fallbackGoal?.trim();
   return text ? [text] : [];

@@ -7,13 +7,41 @@ import { runAction } from "./loop.js";
 import { log } from "./log.js";
 import { RAW_GUIDE, RAW_GUIDE_URI } from "./guide.js";
 
+const loopSchema = z
+  .object({
+    loop: z.object({
+      tasks: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(8)
+        .describe("Steps to run, in order, once per round."),
+      until: z
+        .string()
+        .min(1)
+        .describe(
+          "What the finished page shows. Jev reads the live page after every round and answers whether it holds, so name page evidence: \"the cart is empty\", not \"done\".",
+        ),
+      maxRounds: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe("Hard ceiling on rounds. Default 12."),
+    }),
+  })
+  .describe("Repeat steps until the page shows `until`. One round per pass.");
+
+/** A written step, or a loop over written steps. */
+const taskStepSchema = z.union([z.string().min(1), loopSchema]);
+
 const taskGroupSchema = z.object({
   id: z.string().optional().describe("Label for this series. Echoed back in the result."),
   targetId: z.string().optional().describe("Tab this series runs on."),
   groupId: z.string().optional().describe("Tab group to open a new tab in."),
   startUrl: z.string().optional().describe("Address to open before the first step."),
   goal: z.string().optional().describe("Single step. Use when tasks is omitted."),
-  tasks: z.array(z.string().min(1)).max(24).optional().describe("Steps in order."),
+  tasks: z.array(taskStepSchema).max(24).optional().describe("Steps in order."),
   noFail: z
     .boolean()
     .optional()
@@ -24,10 +52,10 @@ const taskGroupSchema = z.object({
 const runActionSchema = {
   goal: z.string().optional().describe("Single step. Use tasks for a series."),
   tasks: z
-    .array(z.string().min(1))
+    .array(taskStepSchema)
     .max(24)
     .optional()
-    .describe("Steps in order on one tab, one action each."),
+    .describe("Steps in order on one tab, one action each. An entry may be a loop."),
   groups: z
     .array(taskGroupSchema)
     .max(4)
@@ -92,7 +120,13 @@ const RESULT_GUIDE = `# Reading a run_action result
 | \`max_steps\` | Budget or clock out | Resume from \`handoff\` |
 | \`skipped\` | Earlier step stopped this one | \`noFail\` only for independent page steps |
 
-Group \`status\` = worst case. Read \`counts\` for tally.
+Group \`status\` = worst case. Read \`counts\` for tally. A loop step also
+carries \`rounds\`.
+
+One exception to "a stopped step ends the series": \`rejected\` +
+\`already_done\`. The page already shows that step's outcome, so later steps
+still run. Group status still reads \`rejected\`; \`verified\` says where the
+run landed.
 
 ## page reason
 
@@ -100,6 +134,7 @@ Group \`status\` = worst case. Read \`counts\` for tally.
 | --- | --- |
 | \`no_control\` | Click/press: no control for label, or standing \`none\` won |
 | \`no_match\` | Pick (\`open the … result\`): no matching entry, or \`none\` won |
+| \`already_done\` | Control absent because page already shows the outcome. Jev judged it. Series carries on |
 | \`unavailable\` | Out of stock / not delivered here |
 | \`other_route\` | Different route on page |
 | \`wrong_page\` | Page not about wanted thing |
@@ -202,8 +237,9 @@ Step shapes (one page each; words from screen):
   open the <words> result     pick list entry; refuse = no_match
   open the <name> page        reach place (cart, account)
   click <label>               press control; refuse = no_control
-  keep clicking <label>       press until page stops offering it
-  clear <thing>               delete control harness finds
+  repeat <step> until <words> run step per round; Jev judges words on page
+  keep clicking <label>       same, until condition derived from label
+  clear <thing>               same, delete control harness finds
   read <thing>                return page words
   read the page title and url where am I
 
@@ -212,6 +248,18 @@ Cart add = three steps:
   search colgate toothpaste
   open the best matching colgate toothpaste result
   click add to cart
+
+Loops. A tasks entry may be a loop instead of a string:
+  {"loop": {"tasks": ["click remove"], "until": "the cart is empty",
+            "maxRounds": 12}}
+Round = body once, then Jev reads live page: does until hold? Between rounds
+the server waits for the page's own scripts, not a fixed pause.
+Write until as page evidence ("the cart is empty", "no Load more button"),
+never "done". Bounded by maxRounds (default 12, ceiling 50), call deadline,
+step budget, and 2 rounds that change nothing. Never unbounded.
+  completed   page showed until. rounds in the step result
+  partial     rounds or budget ran out, or body stalled after working
+  rejected + no_control   body pressed nothing and page never showed until
 
 Independent errands go in groups: parallel, one tab each. Groups sharing a
 targetId run serial. Each decision sees motive plus steps_done for its series.
@@ -243,7 +291,7 @@ export interface ServerOptions {
 
 export const createJevServer = (options: ServerOptions = {}): McpServer => {
   const server = new McpServer(
-    { name: "jev", version: "0.1.5" },
+    { name: "jev", version: "0.2.0" },
     { instructions: INSTRUCTIONS },
   );
 
