@@ -35,8 +35,12 @@ export interface ActionSpace {
  * Jev reads instructions literally, so each one names the task and the exact
  * condition. https://docs.typesafe.ai/model-jaggedness/jev-1.13
  */
-const clickInstruction = (task: string): string =>
-  `Task: ${task}. Choose the one element to click next to finish that task. Rows marked ADD add the item to the cart. Rows marked PAY open checkout. Do not choose an advertisement or a different product. Choose ${NO_CONTROL} only when none of the listed elements carries out that task.`;
+const clickInstruction = (task: string, pick = false): string => {
+  if (pick) {
+    return `Task: ${task}. Choose the one result entry to open from the listed links. A result entry is a row in a list of search hits or matches. Choose ${NO_CONTROL} when this page is not that kind of list: when \`page_title\` already is the wanted entry, when \`steps_done\` shows an earlier step already opened it, or when every listed link would open something else (a citation, further reading, or a different topic). Do not choose a self-link that merely repeats the page's own title.`;
+  }
+  return `Task: ${task}. Choose the one element to click next to finish that task. Use \`motive\` and \`steps_done\` when they are present: if an earlier step already reached what this task asks for, or if none of the listed elements carries out the task, choose ${NO_CONTROL}. Rows marked ADD add the item to the cart. Rows marked PAY open checkout. Do not choose an advertisement or a different product.`;
+};
 
 const typeInstruction = (task: string): string =>
   `Task: ${task}. Choose the one text field to type the search words into.`;
@@ -145,7 +149,7 @@ export const buildControlQuestions = (
 ): Questions => ({
   control: {
     type: "choice",
-    instructions: `Task: ${task}. The harness read this page and found the controls listed in \`controls\`. Choose the one that carries out the task for the page's own subject, named in \`page_title\`. Several controls can share a label because a page advertises other products alongside its own, so use the title each one sits under. Choose ${NO_CONTROL} only when every control would do something else.`,
+    instructions: `Task: ${task}. The harness read this page and found the controls listed in \`controls\`. Choose the one that carries out the task for the page's own subject, named in \`page_title\`. Use \`motive\` and \`steps_done\` when they are present: if an earlier step already reached what this task asks for, choose ${NO_CONTROL}. Several controls can share a label because a page advertises other products alongside its own, so use the title each one sits under. Choose ${NO_CONTROL} only when every control would do something else.`,
     criteria: {
       ...Object.fromEntries(
         candidates.map((el, index) => [controlOption(index), describeCandidate(el)]),
@@ -185,6 +189,7 @@ export const buildQuestions = (
   ops: Operation[],
   task: string,
   pageElements?: PageElement[],
+  flags?: { pick?: boolean },
 ): Questions => {
   // Page kind and readiness come from the URL and from waits in code, not from Jev.
   // https://docs.typesafe.ai/model-jaggedness/jev-1.13
@@ -224,10 +229,12 @@ export const buildQuestions = (
   if (space.click.length && ops.includes("CLICK")) {
     questions.click_target = {
       type: "choice",
-      instructions: clickInstruction(task),
+      instructions: clickInstruction(task, flags?.pick),
       criteria: {
         ...criteriaFor(space.click, page),
-        [NO_CONTROL]: "None of these elements does the task.",
+        [NO_CONTROL]: flags?.pick
+          ? "This page is not a list of results for the wanted entry, or none of the links is that entry."
+          : "None of these elements does the task.",
       },
     };
   }

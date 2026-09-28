@@ -1,6 +1,6 @@
 {
   "name": "jev-browser-sidekick-mcp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "MCP server that runs plain-language browser steps. Jev, a typed decision model, picks the control on each page instead of an LLM reading the DOM.",
   "type": "module",
   "main": "./dist/api.js",

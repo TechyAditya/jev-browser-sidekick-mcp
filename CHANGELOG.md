@@ -5,14 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-09-28
+
+### Fixed
+
+- Drop the URL and title heuristic that treated a subject page as "not a list".
+  That short-circuit was site-shaped and could refuse a real pick. Refusal is
+  Jev's job again: standing `none`, plus `motive`, `steps_done`, and
+  `page_title` in the pick instructions.
+
+### Changed
+
+- README and MCP instructions: `blocked` is only sign-in, credentials, and
+  captcha. Missing controls and pick refuses are `rejected`. Decision state
+  carries series motive and prior outcomes.
+
 ## [0.1.3] - 2026-09-28
 
 ### Fixed
 
 - When a step's control is absent, return `rejected` with `no_control` / `no_match`
   instead of clicking an unrelated element. Click targets now carry a standing
-  `none` option, and pick steps on a subject page that is not a result list
-  refuse before calling Jev.
+  `none` option.
 - Missing search box and empty "no operation returned" decisions report
   `rejected` / `no_control`, not `blocked` (which is reserved for credentials,
   captchas, and sign-in).

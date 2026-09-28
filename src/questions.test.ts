@@ -15,9 +15,12 @@ test("click targets always offer a standing none option", () => {
   ];
   const space = buildActionSpace(page, { urls: [], values: [], files: [], findTerms: [] });
   const ops = availableOperations(space, false, undefined, { clickOnly: true });
-  const questions = buildQuestions(space, ops, "open the Kolmogorov complexity result", page);
+  const questions = buildQuestions(space, ops, "open the Kolmogorov complexity result", page, {
+    pick: true,
+  });
   assert.ok(questions.click_target);
   const criteria = (questions.click_target?.criteria ?? {}) as Record<string, string>;
-  assert.equal(criteria[NO_CONTROL], "None of these elements does the task.");
+  assert.match(criteria[NO_CONTROL] ?? "", /not a list of results/);
+  assert.match(questions.click_target?.instructions as string, /page_title/);
   assert.match(criteria.e1 ?? "", /Kolmogorov complexity/);
 });

@@ -107,9 +107,11 @@ turned it down.
 | \`skipped\` | An earlier step stopped this one | Set \`noFail\` if the steps stand alone |
 
 \`reason\` values: \`sign_in\`, \`credentials\`, \`captcha\` hand back to you.
-\`unavailable\`, \`wrong_page\`, \`no_control\`, \`other_route\`, \`not_ready\` are the
-page's own answer. \`no_control\` means nothing on that page carried the label
-the step named, and the step refused to press anything else.
+\`unavailable\`, \`wrong_page\`, \`no_control\`, \`no_match\`, \`other_route\`,
+\`not_ready\` are the page's own answer. \`no_control\` means nothing on that page
+carried the label the step named, and the step refused to press anything else.
+\`no_match\` means a pick step found no entry that names the subject, or Jev
+chose the standing \`none\` option among the candidates.
 
 ## proof
 
@@ -213,9 +215,11 @@ The step shapes, one page each:
 One step, one page. Use the words on the screen. Jev matches labels literally.
 
 A click step stays on the page it was handed. When no control there carries
-the label, it comes back rejected with reason no_control rather than pressing
-something else. End a series with a read step when you want to see the
-outcome for yourself.
+the label, or Jev picks the standing none option among the candidates, it
+comes back rejected with reason no_control rather than pressing something
+else. A pick step that finds no matching entry, or whose none option wins,
+comes back rejected with reason no_match. End a series with a read step when
+you want to see the outcome for yourself.
 
 Adding one item to a cart is three steps, one per page:
   search colgate toothpaste
@@ -235,14 +239,19 @@ Two sites, two accounts, or two searches are one call with two groups:
     {"id": "amazon",   "startUrl": "https://amazon.in",   "tasks": ["...", "..."]},
     {"id": "flipkart", "startUrl": "https://flipkart.com", "tasks": ["...", "..."]}
   ]}
-Steps inside a group run in order on its tab, each seeing only the live page.
-Groups sharing a targetId run one after another, because they share the tab.
+Steps inside a group run in order on its tab against the live page. Each
+decision also sees the series motive and a short line for each finished task
+in that series, so Jev can refuse a redundant step. Parallel groups share
+nothing. Groups sharing a targetId run one after another, because they share
+the tab.
 
 Read every step's own status:
   completed   the step did what it said
   partial     it did some of the work and stopped with more to do
-  rejected    the page answered no, such as out of stock. Read reason.
-  blocked     the page wants something only you can give. Read handoff.
+  rejected    the page answered no, such as out of stock or no matching
+              control. Read reason. Missing controls are rejected, not blocked.
+  blocked     the page wants something only you can give (sign-in, password,
+              captcha). Read handoff.
   unverified  every step ran, and expect was missing from the final page
   skipped     an earlier step stopped this one. noFail runs them anyway.
 

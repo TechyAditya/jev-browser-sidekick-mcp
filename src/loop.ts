@@ -44,8 +44,6 @@ import {
   isClickable,
   isNoise,
   isSecretField,
-  looksLikeSearchResults,
-  mentions,
   pageShows,
   prioritize,
   resultCandidates,
@@ -761,29 +759,6 @@ const runTask = async (ctx: {
     // wander off to whichever product Jev picked out of the rail.
     const onList = intent.kind === "pick";
 
-    // An article that already names the subject is not a list of results.
-    // Offering its content links turns "open the result" into a wrong click.
-    if (intent.kind === "pick") {
-      const subject = intent.subject || "";
-      const onSubjectPage =
-        Boolean(subject) &&
-        mentions(currentTitle, subject) &&
-        !looksLikeSearchResults(currentUrl, currentTitle);
-      const entries = onSubjectPage ? [] : resultCandidates(visible, [subject].filter(Boolean));
-      if (onSubjectPage || !entries.length) {
-        return {
-          status: "rejected",
-          summary: onSubjectPage
-            ? `this page is not a list of results for "${clip(subject || task, 40)}"`
-            : `no entry on this page matches "${clip(subject || task, 40)}"`,
-          reason: "no_match",
-          url: currentUrl,
-          title: currentTitle,
-          targetId,
-        };
-      }
-    }
-
     // The task named a button. The harness finds every control carrying those
     // words; which one is really it stays a judgment, so Jev picks.
     if (needAction && !acted && !onList) {
@@ -959,7 +934,7 @@ const runTask = async (ctx: {
         // waiting can still reveal that control; clicking elsewhere cannot.
         noClick: needAction && !onList,
       });
-      questions = buildQuestions(space, ops, task, visible);
+      questions = buildQuestions(space, ops, task, visible, { pick: onList });
       // Old pages are droppable. The live page is pinned.
       // Only the live snapshot goes to Jev. A stale page is a distractor.
       state = ctx.budget.fit([{ text: clip(buildLive(elements), STATE_CAP), pin: true }], questions);

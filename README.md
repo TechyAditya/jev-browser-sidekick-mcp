@@ -120,7 +120,7 @@ Adding one item to a cart is three steps, one per page.
 
 A single `add colgate toothpaste to cart` still runs, but it never leaves the results page, so it presses whatever on that page carries those words.
 
-Each step starts a fresh Jev loop that sees only the live page, so one step never inherits another's page or history.
+Each step runs its own loop against the live page. The decision state also carries the series `motive` and a short `steps_done` line for each finished task in that series, so Jev can refuse a step that earlier work already satisfied. Parallel groups share nothing.
 
 ### Repeat a press until the page stops offering it
 
@@ -245,7 +245,7 @@ The tab is still open and you already share it, so you can finish the step throu
 
 ## Pages that block a step
 
-On every step, the server asks Jev whether the task can happen on this page at all. When Jev says no, the server asks why, then stops the step with `blocked` and a `reason`.
+`blocked` means only that the page wants something only you can give. The reasons are:
 
 
 | `reason`      | The page is                               |
@@ -257,7 +257,7 @@ On every step, the server asks Jev whether the task can happen on this page at a
 
 Those three come back as `blocked` with a handoff, because you own the same tab and can still act. This server never fills a password, a one-time code, or a captcha itself. Type the value in the shared tab, hand it to the user, or stop. Pass ordinary strings such as an email or a postcode in `values`.
 
-Other reasons, such as `unavailable` or `wrong_page`, come back as `rejected`. Those are the page's own answer, not something you can unblock.
+A missing control is not `blocked`. When the page carries no control that does the step, or Jev picks the standing `none` option among the candidates, the step returns `rejected` with `no_control` or `no_match`. Other page answers such as `unavailable` or `wrong_page` also return `rejected`.
 
 ## Keep a call short
 
@@ -313,7 +313,7 @@ Nothing says the state has to be about code. If you are the sort of person who s
 
 Leave these out of the plan. The server waits for loads, follows a link that opens its own tab, recovers element refs that went stale between the snapshot and the click, and skips invisible controls that carry real labels.
 
-Finding a control and choosing it are separate. When a step names a control, the server collects every control on the page carrying those words, including ones drawn as plain text with no accessibility role, and Jev picks one or answers that none of them fits. When nothing fits, the step comes back `rejected` or `blocked` instead of pressing something at random.
+Finding a control and choosing it are separate. When a step names a control, the server collects every control on the page carrying those words, including ones drawn as plain text with no accessibility role. Jev picks one of them, or the standing `none` option when none fits. A pick step does the same over entry candidates that name the subject. When Jev chooses `none`, or the page offers no candidate, the step returns `rejected` with `no_control` or `no_match` instead of pressing something else.
 
 Jev reads text only, so this server works from the page's own text and takes no screenshots. A control drawn without text is found by its DOM text instead.
 

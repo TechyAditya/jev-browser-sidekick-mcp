@@ -5,7 +5,6 @@ import {
   describeElement,
   isTypable,
   looksLikeAdd,
-  looksLikeSearchResults,
   nearestTitle,
   pageShows,
   parseSnapshot,
@@ -101,23 +100,6 @@ test("proof carries its neighbours, so a rail cannot pass as a cart line", () =>
   assert.ok(found);
   assert.match(found, /also bought Colgate/);
   assert.equal(proofContext(empty, "Sensodyne"), undefined);
-});
-
-test("search-results pages are distinct from subject articles", () => {
-  assert.equal(
-    looksLikeSearchResults(
-      "https://en.wikipedia.org/w/index.php?search=Kolmogorov+complexity",
-      "Kolmogorov complexity - Search results - Wikipedia",
-    ),
-    true,
-  );
-  assert.equal(
-    looksLikeSearchResults(
-      "https://en.wikipedia.org/wiki/Kolmogorov_complexity",
-      "Kolmogorov complexity - Wikipedia",
-    ),
-    false,
-  );
 });
 
 test("result candidates require the subject, not any long link", () => {

@@ -154,15 +154,6 @@ export const nearestTitle = (
 export const looksLikeList = (elements: PageElement[], hints: string[]): boolean =>
   resultCandidates(elements, hints).length >= 3;
 
-/**
- * Search-results pages put the query in the address or title. An article that
- * merely names the subject is not a list to pick from.
- */
-export const looksLikeSearchResults = (url: string, title: string): boolean =>
-  /[?&](?:search|q|query)=|\/(?:search|find)(?:\/|$|\?)|search results/i.test(
-    `${url}\n${title}`,
-  );
-
 /** An entry in a list links to its own page; the surrounding chrome does not. */
 export const resultCandidates = (elements: PageElement[], hints: string[]): PageElement[] => {
   const links = elements.filter(
@@ -177,7 +168,7 @@ export const resultCandidates = (elements: PageElement[], hints: string[]): Page
   );
   const subject = hints.filter(Boolean).join(" ").trim();
   // Require the entry to name the wanted thing. Falling back to every long
-  // link turns "open the result" into "click anything" on an article page.
+  // link turns "open the result" into "click anything" when no entry matches.
   if (!subject) return links;
   return links.filter((el) => mentions(el.name, subject));
 };
